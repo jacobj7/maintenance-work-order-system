@@ -1,59 +1,68 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { pool } from "@/lib/db";
 import bcrypt from "bcryptjs";
+import { Pool } from "pg";
 
-const registerSchema = z.object({
-  name: z.string().min(1),
-  email: z.string().email(),
-  password: z.string().min(8),
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
 });
 
-export async function POST(request: Request) {
+const registerSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+  name: z.string().min(1, "Name is required").optional(),
+});
+
+export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const parsed = registerSchema.safeParse(body);
 
-    if (!parsed.success) {
+    const parseResult = registerSchema.safeParse(body);
+    if (!parseResult.success) {
       return NextResponse.json(
-        { error: "Invalid input", details: parsed.error.flatten() },
+        {
+          error: "Validation failed",
+          details: parseResult.error.flatten().fieldErrors,
+        },
         { status: 400 },
       );
     }
 
-    const { name, email, password } = parsed.data;
+    const { email, password, name } = parseResult.data;
 
     const client = await pool.connect();
     try {
-      const existing = await client.query(
+      const existingUser = await client.query(
         "SELECT id FROM users WHERE email = $1",
         [email],
       );
 
-      if (existing.rows.length > 0) {
+      if (existingUser.rows.length > 0) {
         return NextResponse.json(
-          { error: "Email already registered" },
+          { error: "Email already in use" },
           { status: 409 },
         );
       }
 
-      const hashedPassword = await bcrypt.hash(password, 12);
+      const passwordHash = await bcrypt.hash(password, 12);
 
       const result = await client.query(
-        "INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role",
-        [name, email, hashedPassword, "technician"],
+        `INSERT INTO users (email, password_hash, name, created_at, updated_at)
+         VALUES ($1, $2, $3, NOW(), NOW())
+         RETURNING id, email, name, created_at`,
+        [email, passwordHash, name ?? null],
       );
 
-      const user = result.rows[0];
+      const newUser = result.rows[0];
 
       return NextResponse.json(
         {
           message: "User registered successfully",
           user: {
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
+            id: newUser.id,
+            email: newUser.email,
+            name: newUser.name,
+            createdAt: newUser.created_at,
           },
         },
         { status: 201 },

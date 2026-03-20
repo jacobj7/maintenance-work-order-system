@@ -1,7 +1,7 @@
 import NextAuth, { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import { Pool } from "pg";
 import bcrypt from "bcryptjs";
+import { Pool } from "pg";
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -23,15 +23,15 @@ export const authOptions: NextAuthOptions = {
         const client = await pool.connect();
         try {
           const result = await client.query(
-            "SELECT id, email, name, role, org_id, password_hash FROM users WHERE email = $1",
+            "SELECT id, name, email, role, password_hash FROM users WHERE email = $1",
             [credentials.email],
           );
 
-          if (result.rows.length === 0) {
+          const user = result.rows[0];
+
+          if (!user) {
             return null;
           }
-
-          const user = result.rows[0];
 
           const isValid = await bcrypt.compare(
             credentials.password,
@@ -44,10 +44,9 @@ export const authOptions: NextAuthOptions = {
 
           return {
             id: String(user.id),
-            email: user.email,
             name: user.name,
+            email: user.email,
             role: user.role,
-            orgId: user.org_id,
           };
         } finally {
           client.release();
@@ -55,26 +54,24 @@ export const authOptions: NextAuthOptions = {
       },
     }),
   ],
-  session: {
-    strategy: "jwt",
-  },
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
         token.role = (user as any).role;
-        token.orgId = (user as any).orgId;
       }
       return token;
     },
     async session({ session, token }) {
-      if (session.user) {
-        (session.user as any).id = token.id;
-        (session.user as any).role = token.role;
-        (session.user as any).orgId = token.orgId;
+      if (token && session.user) {
+        (session.user as any).id = token.id as string;
+        (session.user as any).role = token.role as string;
       }
       return session;
     },
+  },
+  session: {
+    strategy: "jwt",
   },
   pages: {
     signIn: "/login",
