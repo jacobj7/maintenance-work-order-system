@@ -2,19 +2,16 @@ import { Pool } from "pg";
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  ssl:
+    process.env.NODE_ENV === "production"
+      ? { rejectUnauthorized: false }
+      : false,
 });
+
+export const db = {
+  query: (text: string, params?: unknown[]) => pool.query(text, params),
+};
 
 export { pool };
 
-export async function query<T = any>(
-  sql: string,
-  params: any[] = [],
-): Promise<T[]> {
-  const client = await pool.connect();
-  try {
-    const result = await client.query(sql, params);
-    return result.rows as T[];
-  } finally {
-    client.release();
-  }
-}
+export default pool;

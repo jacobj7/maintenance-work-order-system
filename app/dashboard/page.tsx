@@ -1,50 +1,8 @@
 import { getServerSession } from "next-auth";
-import { redirect } from "next/navigation";
 import { authOptions } from "@/lib/auth";
-import Navbar from "@/components/Navbar";
+import { redirect } from "next/navigation";
+import { db } from "@/lib/db";
 import DashboardClient from "./DashboardClient";
-
-interface SummaryData {
-  totalUsers: number;
-  totalProjects: number;
-  totalTasks: number;
-  completedTasks: number;
-  pendingTasks: number;
-  activeProjects: number;
-}
-
-async function fetchSummaryData(): Promise<SummaryData> {
-  try {
-    const baseUrl =
-      process.env.NEXTAUTH_URL ||
-      process.env.NEXT_PUBLIC_APP_URL ||
-      "http://localhost:3000";
-
-    const response = await fetch(`${baseUrl}/api/dashboard/summary`, {
-      cache: "no-store",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch summary data: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Error fetching dashboard summary:", error);
-    return {
-      totalUsers: 0,
-      totalProjects: 0,
-      totalTasks: 0,
-      completedTasks: 0,
-      pendingTasks: 0,
-      activeProjects: 0,
-    };
-  }
-}
 
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
@@ -53,28 +11,82 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  const summaryData = await fetchSummaryData();
+  let statusCounts = {
+    open: 0,
+    in_progress: 0,
+    completed: 0,
+    overdue: 0,
+  };
 
-  const totalUsers: number = Number(summaryData.totalUsers) || 0;
-  const totalProjects: number = Number(summaryData.totalProjects) || 0;
-  const totalTasks: number = Number(summaryData.totalTasks) || 0;
-  const completedTasks: number = Number(summaryData.completedTasks) || 0;
-  const pendingTasks: number = Number(summaryData.pendingTasks) || 0;
-  const activeProjects: number = Number(summaryData.activeProjects) || 0;
+  let recentTickets: any[] = [];
+  let technicians: any[] = [];
+
+  try {
+    const statusResult = await db.query(`
+      SELECT status, COUNT(*) as count
+      FROM tickets
+      GROUP BY status
+    `);
+
+    for (const row of statusResult.rows) {
+      const status = row.status as string;
+      const count = parseInt(row.count, 10);
+      if (status === "open") statusCounts.open = count;
+      else if (status === "in_progress") statusCounts.in_progress = count;
+      else if (status === "completed") statusCounts.completed = count;
+      else if (status === "overdue") statusCounts.overdue = count;
+    }
+
+    const overdueResult = await db.query(`
+      SELECT COUNT(*) as count
+      FROM tickets
+      WHERE status NOT IN ('completed', 'cancelled')
+        AND due_date < NOW()
+    `);
+    statusCounts.overdue = parseInt(overdueResult.rows[0]?.count ?? "0", 10);
+
+    const ticketsResult = await db.query(`
+      SELECT
+        t.id,
+        t.title,
+        t.status,
+        t.priority,
+        t.created_at,
+        t.due_date,
+        u.name as customer_name,
+        tech.name as technician_name
+      FROM tickets t
+      LEFT JOIN users u ON t.customer_id = u.id
+      LEFT JOIN users tech ON t.technician_id = tech.id
+      ORDER BY t.created_at DESC
+      LIMIT 10
+    `);
+    recentTickets = ticketsResult.rows;
+
+    const techResult = await db.query(`
+      SELECT
+        u.id,
+        u.name,
+        u.email,
+        COUNT(t.id) as active_tickets
+      FROM users u
+      LEFT JOIN tickets t ON t.technician_id = u.id
+        AND t.status NOT IN ('completed', 'cancelled')
+      WHERE u.role = 'technician'
+      GROUP BY u.id, u.name, u.email
+      ORDER BY u.name
+    `);
+    technicians = techResult.rows;
+  } catch (error) {
+    console.error("Dashboard data fetch error:", error);
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Navbar />
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <DashboardClient
-          totalUsers={totalUsers}
-          totalProjects={totalProjects}
-          totalTasks={totalTasks}
-          completedTasks={completedTasks}
-          pendingTasks={pendingTasks}
-          activeProjects={activeProjects}
-        />
-      </main>
-    </div>
+    <DashboardClient
+      session={session}
+      statusCounts={statusCounts}
+      recentTickets={recentTickets}
+      technicians={technicians}
+    />
   );
 }

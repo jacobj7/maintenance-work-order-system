@@ -2,10 +2,9 @@ import { notFound } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import Navbar from "@/components/Navbar";
 import WorkOrderDetailClient from "./WorkOrderDetailClient";
 
-interface PageProps {
+interface WorkOrderDetailPageProps {
   params: { id: string };
 }
 
@@ -21,79 +20,32 @@ async function getWorkOrder(id: string) {
       wo.updated_at,
       wo.due_date,
       wo.completed_at,
-      wo.notes,
       wo.location,
-      wo.asset_id,
+      wo.notes,
       wo.created_by,
       wo.assigned_to,
       u_creator.name AS creator_name,
       u_creator.email AS creator_email,
       u_assignee.name AS assignee_name,
-      u_assignee.email AS assignee_email,
-      a.name AS asset_name,
-      a.serial_number AS asset_serial_number
+      u_assignee.email AS assignee_email
     FROM work_orders wo
     LEFT JOIN users u_creator ON wo.created_by = u_creator.id
     LEFT JOIN users u_assignee ON wo.assigned_to = u_assignee.id
-    LEFT JOIN assets a ON wo.asset_id = a.id
     WHERE wo.id = $1`,
     [id],
   );
 
-  if (result.rows.length === 0) {
-    return null;
-  }
-
-  const row = result.rows[0];
-
-  return {
-    id: row.id,
-    title: row.title,
-    description: row.description ?? null,
-    status: row.status,
-    priority: row.priority,
-    createdAt: row.created_at ? (row.created_at as Date).toISOString() : null,
-    updatedAt: row.updated_at ? (row.updated_at as Date).toISOString() : null,
-    dueDate: row.due_date ? (row.due_date as Date).toISOString() : null,
-    completedAt: row.completed_at
-      ? (row.completed_at as Date).toISOString()
-      : null,
-    notes: row.notes ?? null,
-    location: row.location ?? null,
-    assetId: row.asset_id ?? null,
-    createdBy: row.created_by ?? null,
-    assignedTo: row.assigned_to ?? null,
-    creatorName: row.creator_name ?? null,
-    creatorEmail: row.creator_email ?? null,
-    assigneeName: row.assignee_name ?? null,
-    assigneeEmail: row.assignee_email ?? null,
-    assetName: row.asset_name ?? null,
-    assetSerialNumber: row.asset_serial_number ?? null,
-  };
-}
-
-async function getTechnicians() {
-  const result = await db.query(
-    `SELECT id, name, email, role
-     FROM users
-     WHERE role IN ('technician', 'admin', 'manager')
-     ORDER BY name ASC`,
-  );
-
-  return result.rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    email: row.email,
-    role: row.role,
-  }));
+  return result.rows[0] || null;
 }
 
 async function getWorkOrderComments(workOrderId: string) {
   const result = await db.query(
     `SELECT 
       c.id,
+      c.work_order_id,
       c.content,
       c.created_at,
+      c.updated_at,
       c.user_id,
       u.name AS user_name,
       u.email AS user_email
@@ -104,53 +56,112 @@ async function getWorkOrderComments(workOrderId: string) {
     [workOrderId],
   );
 
-  return result.rows.map((row) => ({
-    id: row.id,
-    content: row.content,
-    createdAt: row.created_at ? (row.created_at as Date).toISOString() : null,
-    userId: row.user_id,
-    userName: row.user_name ?? null,
-    userEmail: row.user_email ?? null,
+  return result.rows;
+}
+
+async function getTechnicians() {
+  const result = await db.query(
+    `SELECT 
+      id,
+      name,
+      email,
+      role
+    FROM users
+    WHERE role IN ('technician', 'admin')
+    ORDER BY name ASC`,
+  );
+
+  return result.rows;
+}
+
+function serializeWorkOrder(workOrder: Record<string, unknown>) {
+  return {
+    id: workOrder.id as string,
+    title: workOrder.title as string,
+    description: workOrder.description as string | null,
+    status: workOrder.status as string,
+    priority: workOrder.priority as string,
+    created_at: workOrder.created_at
+      ? (workOrder.created_at as Date).toISOString()
+      : null,
+    updated_at: workOrder.updated_at
+      ? (workOrder.updated_at as Date).toISOString()
+      : null,
+    due_date: workOrder.due_date
+      ? (workOrder.due_date as Date).toISOString()
+      : null,
+    completed_at: workOrder.completed_at
+      ? (workOrder.completed_at as Date).toISOString()
+      : null,
+    location: workOrder.location as string | null,
+    notes: workOrder.notes as string | null,
+    created_by: workOrder.created_by as string | null,
+    assigned_to: workOrder.assigned_to as string | null,
+    creator_name: workOrder.creator_name as string | null,
+    creator_email: workOrder.creator_email as string | null,
+    assignee_name: workOrder.assignee_name as string | null,
+    assignee_email: workOrder.assignee_email as string | null,
+  };
+}
+
+function serializeComments(comments: Record<string, unknown>[]) {
+  return comments.map((comment) => ({
+    id: comment.id as string,
+    work_order_id: comment.work_order_id as string,
+    content: comment.content as string,
+    created_at: comment.created_at
+      ? (comment.created_at as Date).toISOString()
+      : null,
+    updated_at: comment.updated_at
+      ? (comment.updated_at as Date).toISOString()
+      : null,
+    user_id: comment.user_id as string | null,
+    user_name: comment.user_name as string | null,
+    user_email: comment.user_email as string | null,
   }));
 }
 
-export default async function WorkOrderDetailPage({ params }: PageProps) {
+function serializeTechnicians(technicians: Record<string, unknown>[]) {
+  return technicians.map((tech) => ({
+    id: tech.id as string,
+    name: tech.name as string,
+    email: tech.email as string,
+    role: tech.role as string,
+  }));
+}
+
+export default async function WorkOrderDetailPage({
+  params,
+}: WorkOrderDetailPageProps) {
   const session = await getServerSession(authOptions);
 
   if (!session) {
     notFound();
   }
 
-  const { id } = params;
+  const workOrderId = params.id;
 
-  const [workOrder, technicians, comments] = await Promise.all([
-    getWorkOrder(id),
+  const [workOrder, comments, technicians] = await Promise.all([
+    getWorkOrder(workOrderId),
+    getWorkOrderComments(workOrderId),
     getTechnicians(),
-    getWorkOrderComments(id),
   ]);
 
   if (!workOrder) {
     notFound();
   }
 
-  const currentUser = {
-    id: session.user?.id ?? null,
-    name: session.user?.name ?? null,
-    email: session.user?.email ?? null,
-    role: (session.user as { role?: string })?.role ?? null,
-  };
+  const serializedWorkOrder = serializeWorkOrder(workOrder);
+  const serializedComments = serializeComments(comments);
+  const serializedTechnicians = serializeTechnicians(technicians);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Navbar user={currentUser} />
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <WorkOrderDetailClient
-          workOrder={workOrder}
-          technicians={technicians}
-          comments={comments}
-          currentUser={currentUser}
-        />
-      </main>
-    </div>
+    <WorkOrderDetailClient
+      workOrder={serializedWorkOrder}
+      comments={serializedComments}
+      technicians={serializedTechnicians}
+      currentUserId={session.user?.id as string}
+      currentUserRole={session.user?.role as string}
+    />
   );
 }
