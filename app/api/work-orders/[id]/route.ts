@@ -1,130 +1,95 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { pool } from "@/lib/db";
 import { z } from "zod";
+import { Pool } from "pg";
 
 export const dynamic = "force-dynamic";
 
-const patchSchema = z.object({
-  status: z
-    .enum(["pending", "in_progress", "completed", "cancelled"])
-    .optional(),
-  assigned_to: z.number().int().nullable().optional(),
-  completion_notes: z.string().nullable().optional(),
-  completed_at: z.string().datetime().nullable().optional(),
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  pending: ["assigned", "cancelled"],
+  assigned: ["in_progress", "cancelled"],
+  in_progress: ["on_hold", "completed", "cancelled"],
+  on_hold: ["in_progress", "cancelled"],
+  completed: [],
+  cancelled: [],
+};
+
+const PatchSchema = z.object({
+  status: z.string().optional(),
+  technician_id: z.number().int().positive().optional(),
+  notes: z.string().optional(),
 });
 
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } },
 ) {
+  const session = await getServerSession();
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const id = parseInt(params.id, 10);
+  if (isNaN(id)) {
+    return NextResponse.json(
+      { error: "Invalid work order ID" },
+      { status: 400 },
+    );
+  }
+
+  const client = await pool.connect();
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const workOrderResult = await client.query(
+      `SELECT 
+        wo.*,
+        u.name AS technician_name,
+        u.email AS technician_email,
+        creator.name AS created_by_name,
+        creator.email AS created_by_email
+       FROM work_orders wo
+       LEFT JOIN users u ON wo.technician_id = u.id
+       LEFT JOIN users creator ON wo.created_by = creator.id
+       WHERE wo.id = $1`,
+      [id],
+    );
 
-    const id = parseInt(params.id, 10);
-    if (isNaN(id)) {
+    if (workOrderResult.rows.length === 0) {
       return NextResponse.json(
-        { error: "Invalid work order ID" },
-        { status: 400 },
+        { error: "Work order not found" },
+        { status: 404 },
       );
     }
 
-    const client = await pool.connect();
-    try {
-      const result = await client.query(
-        `SELECT
-          wo.id,
-          wo.title,
-          wo.description,
-          wo.status,
-          wo.priority,
-          wo.created_at,
-          wo.updated_at,
-          wo.completed_at,
-          wo.completion_notes,
-          wo.due_date,
-          creator.id AS creator_id,
-          creator.name AS creator_name,
-          creator.email AS creator_email,
-          assignee.id AS assignee_id,
-          assignee.name AS assignee_name,
-          assignee.email AS assignee_email,
-          asset.id AS asset_id,
-          asset.name AS asset_name,
-          asset.location AS asset_location,
-          cat.id AS category_id,
-          cat.name AS category_name
-        FROM work_orders wo
-        LEFT JOIN users creator ON wo.created_by = creator.id
-        LEFT JOIN users assignee ON wo.assigned_to = assignee.id
-        LEFT JOIN assets asset ON wo.asset_id = asset.id
-        LEFT JOIN categories cat ON wo.category_id = cat.id
-        WHERE wo.id = $1`,
-        [id],
-      );
+    const historyResult = await client.query(
+      `SELECT 
+        sh.*,
+        u.name AS changed_by_name,
+        u.email AS changed_by_email
+       FROM status_history sh
+       LEFT JOIN users u ON sh.changed_by = u.id
+       WHERE sh.work_order_id = $1
+       ORDER BY sh.created_at ASC`,
+      [id],
+    );
 
-      if (result.rows.length === 0) {
-        return NextResponse.json(
-          { error: "Work order not found" },
-          { status: 404 },
-        );
-      }
+    const workOrder = {
+      ...workOrderResult.rows[0],
+      status_history: historyResult.rows,
+    };
 
-      const row = result.rows[0];
-      const workOrder = {
-        id: row.id,
-        title: row.title,
-        description: row.description,
-        status: row.status,
-        priority: row.priority,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-        completed_at: row.completed_at,
-        completion_notes: row.completion_notes,
-        due_date: row.due_date,
-        creator: row.creator_id
-          ? {
-              id: row.creator_id,
-              name: row.creator_name,
-              email: row.creator_email,
-            }
-          : null,
-        assignee: row.assignee_id
-          ? {
-              id: row.assignee_id,
-              name: row.assignee_name,
-              email: row.assignee_email,
-            }
-          : null,
-        asset: row.asset_id
-          ? {
-              id: row.asset_id,
-              name: row.asset_name,
-              location: row.asset_location,
-            }
-          : null,
-        category: row.category_id
-          ? {
-              id: row.category_id,
-              name: row.category_name,
-            }
-          : null,
-      };
-
-      return NextResponse.json(workOrder);
-    } finally {
-      client.release();
-    }
+    return NextResponse.json({ data: workOrder });
   } catch (error) {
     console.error("GET /api/work-orders/[id] error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
     );
+  } finally {
+    client.release();
   }
 }
 
@@ -132,116 +97,153 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: { id: string } },
 ) {
+  const session = await getServerSession();
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const id = parseInt(params.id, 10);
+  if (isNaN(id)) {
+    return NextResponse.json(
+      { error: "Invalid work order ID" },
+      { status: 400 },
+    );
+  }
+
+  let body: unknown;
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
-    const id = parseInt(params.id, 10);
-    if (isNaN(id)) {
+  const parseResult = PatchSchema.safeParse(body);
+  if (!parseResult.success) {
+    return NextResponse.json(
+      { error: "Validation failed", details: parseResult.error.flatten() },
+      { status: 422 },
+    );
+  }
+
+  const { status, technician_id, notes } = parseResult.data;
+
+  if (!status && technician_id === undefined) {
+    return NextResponse.json(
+      { error: "At least one of status or technician_id must be provided" },
+      { status: 400 },
+    );
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const existingResult = await client.query(
+      "SELECT * FROM work_orders WHERE id = $1 FOR UPDATE",
+      [id],
+    );
+
+    if (existingResult.rows.length === 0) {
+      await client.query("ROLLBACK");
       return NextResponse.json(
-        { error: "Invalid work order ID" },
-        { status: 400 },
+        { error: "Work order not found" },
+        { status: 404 },
       );
     }
 
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    const existing = existingResult.rows[0];
+    const currentStatus: string = existing.status;
+
+    if (status && status !== currentStatus) {
+      const allowedTransitions = VALID_TRANSITIONS[currentStatus];
+      if (!allowedTransitions) {
+        await client.query("ROLLBACK");
+        return NextResponse.json(
+          { error: `Unknown current status: ${currentStatus}` },
+          { status: 400 },
+        );
+      }
+      if (!allowedTransitions.includes(status)) {
+        await client.query("ROLLBACK");
+        return NextResponse.json(
+          {
+            error: `Invalid status transition from '${currentStatus}' to '${status}'`,
+            allowed_transitions: allowedTransitions,
+          },
+          { status: 422 },
+        );
+      }
     }
 
-    const parseResult = patchSchema.safeParse(body);
-    if (!parseResult.success) {
-      return NextResponse.json(
-        { error: "Validation failed", details: parseResult.error.flatten() },
-        { status: 422 },
+    if (technician_id !== undefined) {
+      const techResult = await client.query(
+        "SELECT id FROM users WHERE id = $1",
+        [technician_id],
       );
-    }
-
-    const data = parseResult.data;
-
-    if (Object.keys(data).length === 0) {
-      return NextResponse.json(
-        { error: "No fields provided for update" },
-        { status: 400 },
-      );
+      if (techResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return NextResponse.json(
+          { error: "Technician not found" },
+          { status: 404 },
+        );
+      }
     }
 
     const setClauses: string[] = [];
     const values: unknown[] = [];
     let paramIndex = 1;
 
-    if (data.status !== undefined) {
+    if (status && status !== currentStatus) {
       setClauses.push(`status = $${paramIndex++}`);
-      values.push(data.status);
+      values.push(status);
     }
 
-    if (data.assigned_to !== undefined) {
-      setClauses.push(`assigned_to = $${paramIndex++}`);
-      values.push(data.assigned_to);
-    }
-
-    if (data.completion_notes !== undefined) {
-      setClauses.push(`completion_notes = $${paramIndex++}`);
-      values.push(data.completion_notes);
-    }
-
-    if (data.completed_at !== undefined) {
-      setClauses.push(`completed_at = $${paramIndex++}`);
-      values.push(data.completed_at);
+    if (technician_id !== undefined) {
+      setClauses.push(`technician_id = $${paramIndex++}`);
+      values.push(technician_id);
     }
 
     setClauses.push(`updated_at = NOW()`);
+
     values.push(id);
+    const updateQuery = `
+      UPDATE work_orders
+      SET ${setClauses.join(", ")}
+      WHERE id = $${paramIndex}
+      RETURNING *
+    `;
 
-    const client = await pool.connect();
-    try {
-      const checkResult = await client.query(
-        "SELECT id FROM work_orders WHERE id = $1",
-        [id],
+    const updateResult = await client.query(updateQuery, values);
+    const updatedWorkOrder = updateResult.rows[0];
+
+    let newHistoryRecord = null;
+    if (status && status !== currentStatus) {
+      const changedById =
+        (session.user as { id?: number | string } | undefined)?.id ?? null;
+
+      const historyResult = await client.query(
+        `INSERT INTO status_history (work_order_id, previous_status, new_status, changed_by, notes, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         RETURNING *`,
+        [id, currentStatus, status, changedById, notes ?? null],
       );
-
-      if (checkResult.rows.length === 0) {
-        return NextResponse.json(
-          { error: "Work order not found" },
-          { status: 404 },
-        );
-      }
-
-      const updateResult = await client.query(
-        `UPDATE work_orders
-         SET ${setClauses.join(", ")}
-         WHERE id = $${paramIndex}
-         RETURNING
-           id,
-           title,
-           description,
-           status,
-           priority,
-           created_at,
-           updated_at,
-           completed_at,
-           completion_notes,
-           due_date,
-           created_by,
-           assigned_to,
-           asset_id,
-           category_id`,
-        values,
-      );
-
-      return NextResponse.json(updateResult.rows[0]);
-    } finally {
-      client.release();
+      newHistoryRecord = historyResult.rows[0];
     }
+
+    await client.query("COMMIT");
+
+    return NextResponse.json({
+      data: updatedWorkOrder,
+      status_history_record: newHistoryRecord,
+    });
   } catch (error) {
+    await client.query("ROLLBACK");
     console.error("PATCH /api/work-orders/[id] error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
     );
+  } finally {
+    client.release();
   }
 }

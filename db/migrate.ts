@@ -12,150 +12,76 @@ async function migrate() {
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
+        email VARCHAR(255) NOT NULL UNIQUE,
         password_hash VARCHAR(255) NOT NULL,
-        role VARCHAR(50) NOT NULL DEFAULT 'technician',
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        role VARCHAR(50) NOT NULL DEFAULT 'user',
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
       )
     `);
 
     await client.query(`
-      CREATE TABLE IF NOT EXISTS locations (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      CREATE TABLE IF NOT EXISTS properties (
+        id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
-        description TEXT,
-        address TEXT,
-        parent_id UUID REFERENCES locations(id) ON DELETE SET NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        address TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
       )
     `);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS assets (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        id SERIAL PRIMARY KEY,
+        property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
         name VARCHAR(255) NOT NULL,
         description TEXT,
-        asset_tag VARCHAR(100) UNIQUE,
-        serial_number VARCHAR(100),
-        model VARCHAR(255),
-        manufacturer VARCHAR(255),
-        purchase_date DATE,
-        purchase_cost NUMERIC(12, 2),
-        status VARCHAR(50) NOT NULL DEFAULT 'active',
-        location_id UUID REFERENCES locations(id) ON DELETE SET NULL,
-        parent_id UUID REFERENCES assets(id) ON DELETE SET NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        category VARCHAR(100),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
       )
     `);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS work_orders (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        id SERIAL PRIMARY KEY,
         title VARCHAR(255) NOT NULL,
         description TEXT,
         status VARCHAR(50) NOT NULL DEFAULT 'open',
         priority VARCHAR(50) NOT NULL DEFAULT 'medium',
-        category VARCHAR(100),
-        location_id UUID REFERENCES locations(id) ON DELETE SET NULL,
-        asset_id UUID REFERENCES assets(id) ON DELETE SET NULL,
-        assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
-        created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-        target_date TIMESTAMP WITH TIME ZONE,
-        completed_at TIMESTAMP WITH TIME ZONE,
-        completion_notes TEXT,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        property_id INTEGER REFERENCES properties(id) ON DELETE SET NULL,
+        asset_id INTEGER REFERENCES assets(id) ON DELETE SET NULL,
+        assigned_to INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        requestor_name VARCHAR(255),
+        requestor_email VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
       )
     `);
 
     await client.query(`
-      CREATE TABLE IF NOT EXISTS parts_log (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        work_order_id UUID REFERENCES work_orders(id) ON DELETE CASCADE,
-        part_name VARCHAR(255) NOT NULL,
-        part_number VARCHAR(100),
-        quantity NUMERIC(10, 2) NOT NULL DEFAULT 1,
-        unit_cost NUMERIC(12, 2),
-        total_cost NUMERIC(12, 2),
-        notes TEXT,
-        logged_by UUID REFERENCES users(id) ON DELETE SET NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-      )
-    `);
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS labor_entries (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        work_order_id UUID REFERENCES work_orders(id) ON DELETE CASCADE,
-        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-        hours NUMERIC(8, 2) NOT NULL,
-        hourly_rate NUMERIC(10, 2),
-        total_cost NUMERIC(12, 2),
-        description TEXT,
-        work_date DATE NOT NULL DEFAULT CURRENT_DATE,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      CREATE TABLE IF NOT EXISTS status_history (
+        id SERIAL PRIMARY KEY,
+        work_order_id INTEGER NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,
+        old_status VARCHAR(50),
+        new_status VARCHAR(50) NOT NULL,
+        changed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        note TEXT,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
       )
     `);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS attachments (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        work_order_id UUID REFERENCES work_orders(id) ON DELETE CASCADE,
-        asset_id UUID REFERENCES assets(id) ON DELETE CASCADE,
-        file_name VARCHAR(255) NOT NULL,
+        id SERIAL PRIMARY KEY,
+        work_order_id INTEGER NOT NULL REFERENCES work_orders(id) ON DELETE CASCADE,
         file_url TEXT NOT NULL,
-        file_type VARCHAR(100),
-        file_size INTEGER,
-        uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        file_name VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
       )
-    `);
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS preventive_maintenance (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        title VARCHAR(255) NOT NULL,
-        description TEXT,
-        asset_id UUID REFERENCES assets(id) ON DELETE CASCADE,
-        location_id UUID REFERENCES locations(id) ON DELETE SET NULL,
-        assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
-        frequency VARCHAR(50) NOT NULL,
-        frequency_interval INTEGER NOT NULL DEFAULT 1,
-        priority VARCHAR(50) NOT NULL DEFAULT 'medium',
-        category VARCHAR(100),
-        estimated_hours NUMERIC(8, 2),
-        last_performed_at TIMESTAMP WITH TIME ZONE,
-        next_due_at TIMESTAMP WITH TIME ZONE,
-        is_active BOOLEAN NOT NULL DEFAULT TRUE,
-        created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-      )
-    `);
-
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_work_orders_status ON work_orders(status);
-      CREATE INDEX IF NOT EXISTS idx_work_orders_priority ON work_orders(priority);
-      CREATE INDEX IF NOT EXISTS idx_work_orders_assigned_to ON work_orders(assigned_to);
-      CREATE INDEX IF NOT EXISTS idx_work_orders_created_by ON work_orders(created_by);
-      CREATE INDEX IF NOT EXISTS idx_work_orders_location_id ON work_orders(location_id);
-      CREATE INDEX IF NOT EXISTS idx_work_orders_asset_id ON work_orders(asset_id);
-      CREATE INDEX IF NOT EXISTS idx_assets_location_id ON assets(location_id);
-      CREATE INDEX IF NOT EXISTS idx_parts_log_work_order_id ON parts_log(work_order_id);
-      CREATE INDEX IF NOT EXISTS idx_labor_entries_work_order_id ON labor_entries(work_order_id);
-      CREATE INDEX IF NOT EXISTS idx_attachments_work_order_id ON attachments(work_order_id);
-      CREATE INDEX IF NOT EXISTS idx_preventive_maintenance_asset_id ON preventive_maintenance(asset_id);
-      CREATE INDEX IF NOT EXISTS idx_preventive_maintenance_next_due_at ON preventive_maintenance(next_due_at);
     `);
 
     await client.query("COMMIT");
+
     console.log("Migration completed successfully.");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -163,11 +89,15 @@ async function migrate() {
     throw error;
   } finally {
     client.release();
-    await pool.end();
   }
 }
 
-migrate().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+migrate()
+  .then(() => {
+    console.log("All migrations ran successfully.");
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error("Migration error:", error);
+    process.exit(1);
+  });

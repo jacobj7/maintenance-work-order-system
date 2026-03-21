@@ -1,518 +1,302 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useSession } from "next-auth/react";
 
-interface Technician {
+type WorkOrderStatus =
+  | "open"
+  | "in_progress"
+  | "on_hold"
+  | "completed"
+  | "cancelled";
+type WorkOrderPriority = "low" | "medium" | "high" | "critical";
+
+interface StatusHistoryEntry {
   id: string;
-  name: string;
-  email: string;
+  status: WorkOrderStatus;
+  changed_by: string;
+  changed_at: string;
+  notes?: string;
 }
 
 interface WorkOrder {
   id: string;
   title: string;
   description: string;
-  status: "pending" | "in_progress" | "completed" | "cancelled";
-  priority: "low" | "medium" | "high" | "urgent";
-  assignedTechnicianId: string | null;
-  assignedTechnicianName: string | null;
-  completionNotes: string | null;
-  signedOffAt: string | null;
-  signedOffBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-  location: string | null;
-  category: string | null;
-  estimatedHours: number | null;
-  actualHours: number | null;
+  status: WorkOrderStatus;
+  priority: WorkOrderPriority;
+  assigned_technician?: string;
+  created_at: string;
+  updated_at: string;
+  location?: string;
+  requester?: string;
+  status_history: StatusHistoryEntry[];
 }
 
 interface WorkOrderDetailClientProps {
   workOrder: WorkOrder;
-  technicians: Technician[];
-  userRole: string;
+  technicians: { id: string; name: string }[];
 }
 
-const STATUS_OPTIONS = [
-  { value: "pending", label: "Pending" },
-  { value: "in_progress", label: "In Progress" },
-  { value: "completed", label: "Completed" },
-  { value: "cancelled", label: "Cancelled" },
-];
-
-const PRIORITY_OPTIONS = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "urgent", label: "Urgent" },
-];
-
-const STATUS_COLORS: Record<string, string> = {
-  pending: "bg-yellow-100 text-yellow-800 border-yellow-200",
-  in_progress: "bg-blue-100 text-blue-800 border-blue-200",
+const STATUS_COLORS: Record<WorkOrderStatus, string> = {
+  open: "bg-blue-100 text-blue-800 border-blue-200",
+  in_progress: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  on_hold: "bg-orange-100 text-orange-800 border-orange-200",
   completed: "bg-green-100 text-green-800 border-green-200",
-  cancelled: "bg-red-100 text-red-800 border-red-200",
+  cancelled: "bg-gray-100 text-gray-800 border-gray-200",
 };
 
-const PRIORITY_COLORS: Record<string, string> = {
-  low: "bg-gray-100 text-gray-700 border-gray-200",
-  medium: "bg-orange-100 text-orange-700 border-orange-200",
-  high: "bg-red-100 text-red-700 border-red-200",
-  urgent: "bg-purple-100 text-purple-700 border-purple-200",
+const PRIORITY_COLORS: Record<WorkOrderPriority, string> = {
+  low: "bg-slate-100 text-slate-700 border-slate-200",
+  medium: "bg-blue-100 text-blue-700 border-blue-200",
+  high: "bg-orange-100 text-orange-700 border-orange-200",
+  critical: "bg-red-100 text-red-700 border-red-200",
 };
+
+const STATUS_TIMELINE_COLORS: Record<WorkOrderStatus, string> = {
+  open: "bg-blue-500",
+  in_progress: "bg-yellow-500",
+  on_hold: "bg-orange-500",
+  completed: "bg-green-500",
+  cancelled: "bg-gray-500",
+};
+
+function formatLabel(value: string): string {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatDate(dateString: string): string {
+  return new Date(dateString).toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 export default function WorkOrderDetailClient({
   workOrder,
   technicians,
-  userRole,
 }: WorkOrderDetailClientProps) {
   const router = useRouter();
-  const { data: session } = useSession();
-  const [isPending, startTransition] = useTransition();
-
-  const [status, setStatus] = useState(workOrder.status);
-  const [priority, setPriority] = useState(workOrder.priority);
-  const [assignedTechnicianId, setAssignedTechnicianId] = useState(
-    workOrder.assignedTechnicianId ?? "",
+  const [status, setStatus] = useState<WorkOrderStatus>(workOrder.status);
+  const [assignedTechnician, setAssignedTechnician] = useState(
+    workOrder.assigned_technician || "",
   );
-  const [completionNotes, setCompletionNotes] = useState(
-    workOrder.completionNotes ?? "",
-  );
-  const [actualHours, setActualHours] = useState(
-    workOrder.actualHours?.toString() ?? "",
-  );
+  const [notes, setNotes] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isSigningOff, setIsSigningOff] = useState(false);
 
-  const isManager = userRole === "manager" || userRole === "admin";
-  const isTechnician = userRole === "technician";
-  const isSignedOff = !!workOrder.signedOffAt;
-
-  const patchWorkOrder = async (payload: Record<string, unknown>) => {
-    const response = await fetch(`/api/work-orders/${workOrder.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(
-        data.error ?? `Request failed with status ${response.status}`,
-      );
-    }
-
-    return response.json();
-  };
-
-  const handleSave = async () => {
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
     setError(null);
     setSuccessMessage(null);
-    setIsSaving(true);
 
     try {
-      const payload: Record<string, unknown> = {
-        status,
-        priority,
-        completionNotes: completionNotes || null,
-        actualHours: actualHours ? parseFloat(actualHours) : null,
-      };
+      const payload: Record<string, string> = { status };
+      if (assignedTechnician) payload.assigned_technician = assignedTechnician;
+      if (notes.trim()) payload.notes = notes.trim();
 
-      if (isManager) {
-        payload.assignedTechnicianId = assignedTechnicianId || null;
+      const response = await fetch(`/api/work-orders/${workOrder.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(
+          data.error || `Request failed with status ${response.status}`,
+        );
       }
 
-      await patchWorkOrder(payload);
       setSuccessMessage("Work order updated successfully.");
-      startTransition(() => {
-        router.refresh();
-      });
+      setNotes("");
+      router.refresh();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to update work order.",
+        err instanceof Error ? err.message : "An unexpected error occurred.",
       );
     } finally {
-      setIsSaving(false);
+      setIsSubmitting(false);
     }
   };
-
-  const handleSignOff = async () => {
-    if (
-      !window.confirm(
-        "Are you sure you want to sign off on this work order? This action cannot be undone.",
-      )
-    ) {
-      return;
-    }
-
-    setError(null);
-    setSuccessMessage(null);
-    setIsSigningOff(true);
-
-    try {
-      await patchWorkOrder({
-        status: "completed",
-        signOff: true,
-        completionNotes: completionNotes || null,
-        actualHours: actualHours ? parseFloat(actualHours) : null,
-      });
-      setStatus("completed");
-      setSuccessMessage("Work order signed off successfully.");
-      startTransition(() => {
-        router.refresh();
-      });
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to sign off work order.",
-      );
-    } finally {
-      setIsSigningOff(false);
-    }
-  };
-
-  const formatDate = (dateString: string | null) => {
-    if (!dateString) return "—";
-    return new Date(dateString).toLocaleString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
-  const hasChanges =
-    status !== workOrder.status ||
-    priority !== workOrder.priority ||
-    assignedTechnicianId !== (workOrder.assignedTechnicianId ?? "") ||
-    completionNotes !== (workOrder.completionNotes ?? "") ||
-    actualHours !== (workOrder.actualHours?.toString() ?? "");
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-8">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <button
-              onClick={() => router.back()}
-              className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1 transition-colors"
-            >
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M15 19l-7-7 7-7"
-                />
-              </svg>
-              Back
-            </button>
-            <span className="text-gray-300">/</span>
-            <span className="text-sm text-gray-500">Work Orders</span>
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900 truncate">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <p className="text-sm text-gray-500 mb-1">
+            Work Order #{workOrder.id}
+          </p>
+          <h1 className="text-2xl font-bold text-gray-900">
             {workOrder.title}
           </h1>
-          <p className="text-sm text-gray-500 mt-1">ID: {workOrder.id}</p>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-wrap">
           <span
-            className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium border ${STATUS_COLORS[status]}`}
+            className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${STATUS_COLORS[workOrder.status]}`}
           >
-            {STATUS_OPTIONS.find((s) => s.value === status)?.label ?? status}
+            {formatLabel(workOrder.status)}
           </span>
           <span
-            className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium border ${PRIORITY_COLORS[priority]}`}
+            className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium border ${PRIORITY_COLORS[workOrder.priority]}`}
           >
-            {PRIORITY_OPTIONS.find((p) => p.value === priority)?.label ??
-              priority}
+            {formatLabel(workOrder.priority)} Priority
           </span>
         </div>
       </div>
 
-      {/* Alerts */}
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 flex items-start gap-3">
-          <svg
-            className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
-          <p className="text-sm text-red-700">{error}</p>
-        </div>
-      )}
-
-      {successMessage && (
-        <div className="rounded-lg border border-green-200 bg-green-50 p-4 flex items-start gap-3">
-          <svg
-            className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
-          <p className="text-sm text-green-700">{successMessage}</p>
-        </div>
-      )}
-
-      {isSignedOff && (
-        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 flex items-start gap-3">
-          <svg
-            className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"
-            />
-          </svg>
+      {/* Details Card */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+        <h2 className="text-lg font-semibold text-gray-800 mb-4">Details</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
           <div>
-            <p className="text-sm font-medium text-blue-800">
-              This work order has been signed off
-            </p>
-            <p className="text-xs text-blue-600 mt-0.5">
-              Signed off by {workOrder.signedOffBy} on{" "}
-              {formatDate(workOrder.signedOffAt)}
+            <p className="text-gray-500 font-medium">Description</p>
+            <p className="text-gray-800 mt-1 whitespace-pre-wrap">
+              {workOrder.description}
             </p>
           </div>
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Content */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Description */}
-          <div className="bg-white rounded-xl border border-gray-200 p-6">
-            <h2 className="text-base font-semibold text-gray-900 mb-3">
-              Description
-            </h2>
-            <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">
-              {workOrder.description || "No description provided."}
-            </p>
-          </div>
-
-          {/* Status & Priority Controls */}
-          <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-            <h2 className="text-base font-semibold text-gray-900">
-              Status & Priority
-            </h2>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Status
-                </label>
-                <select
-                  value={status}
-                  onChange={(e) =>
-                    setStatus(e.target.value as WorkOrder["status"])
-                  }
-                  disabled={isSignedOff}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed"
-                >
-                  {STATUS_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Priority
-                </label>
-                <select
-                  value={priority}
-                  onChange={(e) =>
-                    setPriority(e.target.value as WorkOrder["priority"])
-                  }
-                  disabled={isSignedOff || !isManager}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed"
-                >
-                  {PRIORITY_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Completion Notes */}
-          <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-            <h2 className="text-base font-semibold text-gray-900">
-              Completion Notes
-            </h2>
+          {workOrder.location && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Notes
-                <span className="text-gray-400 font-normal ml-1">
-                  (optional)
-                </span>
-              </label>
-              <textarea
-                value={completionNotes}
-                onChange={(e) => setCompletionNotes(e.target.value)}
-                disabled={isSignedOff}
-                rows={5}
-                placeholder="Enter completion notes, observations, or any relevant details..."
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed resize-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Actual Hours
-              </label>
-              <input
-                type="number"
-                value={actualHours}
-                onChange={(e) => setActualHours(e.target.value)}
-                disabled={isSignedOff}
-                min="0"
-                step="0.5"
-                placeholder="0.0"
-                className="w-32 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed"
-              />
-            </div>
-          </div>
-
-          {/* Action Buttons */}
-          {!isSignedOff && (
-            <div className="flex items-center gap-3">
-              <button
-                onClick={handleSave}
-                disabled={isSaving || isSigningOff || !hasChanges}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isSaving ? (
-                  <>
-                    <svg
-                      className="w-4 h-4 animate-spin"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                      />
-                    </svg>
-                    Saving...
-                  </>
-                ) : (
-                  "Save Changes"
-                )}
-              </button>
-
-              {(isManager || isTechnician) && status === "in_progress" && (
-                <button
-                  onClick={handleSignOff}
-                  disabled={isSaving || isSigningOff}
-                  className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {isSigningOff ? (
-                    <>
-                      <svg
-                        className="w-4 h-4 animate-spin"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                      >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        />
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                        />
-                      </svg>
-                      Signing Off...
-                    </>
-                  ) : (
-                    <>
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                        />
-                      </svg>
-                      Sign Off
-                    </>
-                  )}
-                </button>
-              )}
+              <p className="text-gray-500 font-medium">Location</p>
+              <p className="text-gray-800 mt-1">{workOrder.location}</p>
             </div>
           )}
+          {workOrder.requester && (
+            <div>
+              <p className="text-gray-500 font-medium">Requester</p>
+              <p className="text-gray-800 mt-1">{workOrder.requester}</p>
+            </div>
+          )}
+          {workOrder.assigned_technician && (
+            <div>
+              <p className="text-gray-500 font-medium">Assigned Technician</p>
+              <p className="text-gray-800 mt-1">
+                {workOrder.assigned_technician}
+              </p>
+            </div>
+          )}
+          <div>
+            <p className="text-gray-500 font-medium">Created</p>
+            <p className="text-gray-800 mt-1">
+              {formatDate(workOrder.created_at)}
+            </p>
+          </div>
+          <div>
+            <p className="text-gray-500 font-medium">Last Updated</p>
+            <p className="text-gray-800 mt-1">
+              {formatDate(workOrder.updated_at)}
+            </p>
+          </div>
         </div>
+      </div>
 
-        {/* Sidebar */}
-        <div className="space-y-6">
-          {/* Technician Assignment (Manager Only) */}
-          {isManager && (
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
-              <h2 className="text-base font-semibold text-gray-900 mb-4">
-                Technician Assignment
-              </h2>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Assigned Technician
-                </label>
+      {/* Status History Timeline */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+        <h2 className="text-lg font-semibold text-gray-800 mb-6">
+          Status History
+        </h2>
+        {workOrder.status_history.length === 0 ? (
+          <p className="text-sm text-gray-500">No status history available.</p>
+        ) : (
+          <ol className="relative border-l border-gray-200 space-y-6 ml-3">
+            {workOrder.status_history.map((entry, index) => (
+              <li key={entry.id} className="ml-6">
+                <span
+                  className={`absolute -left-3 flex items-center justify-center w-6 h-6 rounded-full ring-4 ring-white ${STATUS_TIMELINE_COLORS[entry.status]}`}
+                >
+                  {index === 0 && (
+                    <svg
+                      className="w-3 h-3 text-white"
+                      fill="currentColor"
+                      viewBox="0 0 20 20"
+                      aria-hidden="true"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  )}
+                </span>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                  <div>
+                    <span
+                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${STATUS_COLORS[entry.status]}`}
+                    >
+                      {formatLabel(entry.status)}
+                    </span>
+                    {entry.notes && (
+                      <p className="mt-1 text-sm text-gray-600 italic">
+                        "{entry.notes}"
+                      </p>
+                    )}
+                    <p className="mt-1 text-xs text-gray-500">
+                      Changed by{" "}
+                      <span className="font-medium text-gray-700">
+                        {entry.changed_by}
+                      </span>
+                    </p>
+                  </div>
+                  <time className="text-xs text-gray-400 whitespace-nowrap">
+                    {formatDate(entry.changed_at)}
+                  </time>
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+
+      {/* Update Form */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+        <h2 className="text-lg font-semibold text-gray-800 mb-4">
+          Update Work Order
+        </h2>
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            {/* Status */}
+            <div>
+              <label
+                htmlFor="status"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
+                Status
+              </label>
+              <select
+                id="status"
+                value={status}
+                onChange={(e) => setStatus(e.target.value as WorkOrderStatus)}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="open">Open</option>
+                <option value="in_progress">In Progress</option>
+                <option value="on_hold">On Hold</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </div>
+
+            {/* Assign Technician */}
+            <div>
+              <label
+                htmlFor="technician"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
+                Assign Technician
+              </label>
+              {technicians.length > 0 ? (
                 <select
-                  value={assignedTechnicianId}
-                  onChange={(e) => setAssignedTechnicianId(e.target.value)}
-                  disabled={isSignedOff}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-50 disabled:text-gray-500 disabled:cursor-not-allowed"
+                  id="technician"
+                  value={assignedTechnician}
+                  onChange={(e) => setAssignedTechnician(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 >
                   <option value="">— Unassigned —</option>
                   {technicians.map((tech) => (
@@ -521,102 +305,88 @@ export default function WorkOrderDetailClient({
                     </option>
                   ))}
                 </select>
-              </div>
+              ) : (
+                <input
+                  id="technician"
+                  type="text"
+                  value={assignedTechnician}
+                  onChange={(e) => setAssignedTechnician(e.target.value)}
+                  placeholder="Enter technician name or ID"
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              )}
             </div>
-          )}
-
-          {/* Work Order Details */}
-          <div className="bg-white rounded-xl border border-gray-200 p-6">
-            <h2 className="text-base font-semibold text-gray-900 mb-4">
-              Details
-            </h2>
-            <dl className="space-y-3">
-              {workOrder.location && (
-                <div>
-                  <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                    Location
-                  </dt>
-                  <dd className="text-sm text-gray-900 mt-0.5">
-                    {workOrder.location}
-                  </dd>
-                </div>
-              )}
-              {workOrder.category && (
-                <div>
-                  <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                    Category
-                  </dt>
-                  <dd className="text-sm text-gray-900 mt-0.5">
-                    {workOrder.category}
-                  </dd>
-                </div>
-              )}
-              {workOrder.estimatedHours != null && (
-                <div>
-                  <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                    Estimated Hours
-                  </dt>
-                  <dd className="text-sm text-gray-900 mt-0.5">
-                    {workOrder.estimatedHours}h
-                  </dd>
-                </div>
-              )}
-              {!isManager && workOrder.assignedTechnicianName && (
-                <div>
-                  <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                    Assigned To
-                  </dt>
-                  <dd className="text-sm text-gray-900 mt-0.5">
-                    {workOrder.assignedTechnicianName}
-                  </dd>
-                </div>
-              )}
-              <div>
-                <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                  Created
-                </dt>
-                <dd className="text-sm text-gray-900 mt-0.5">
-                  {formatDate(workOrder.createdAt)}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                  Last Updated
-                </dt>
-                <dd className="text-sm text-gray-900 mt-0.5">
-                  {formatDate(workOrder.updatedAt)}
-                </dd>
-              </div>
-            </dl>
           </div>
 
-          {/* Sign-off Info */}
-          {isSignedOff && (
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
-              <h2 className="text-base font-semibold text-gray-900 mb-4">
-                Sign-off Information
-              </h2>
-              <dl className="space-y-3">
-                <div>
-                  <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                    Signed Off By
-                  </dt>
-                  <dd className="text-sm text-gray-900 mt-0.5">
-                    {workOrder.signedOffBy ?? "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                    Signed Off At
-                  </dt>
-                  <dd className="text-sm text-gray-900 mt-0.5">
-                    {formatDate(workOrder.signedOffAt)}
-                  </dd>
-                </div>
-              </dl>
+          {/* Notes */}
+          <div>
+            <label
+              htmlFor="notes"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Notes{" "}
+              <span className="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <textarea
+              id="notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              placeholder="Add a note about this status change..."
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
+            />
+          </div>
+
+          {/* Feedback */}
+          {error && (
+            <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+              {error}
             </div>
           )}
-        </div>
+          {successMessage && (
+            <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">
+              {successMessage}
+            </div>
+          )}
+
+          {/* Submit */}
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isSubmitting ? (
+                <>
+                  <svg
+                    className="animate-spin h-4 w-4 text-white"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8v8H4z"
+                    />
+                  </svg>
+                  Saving…
+                </>
+              ) : (
+                "Save Changes"
+              )}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

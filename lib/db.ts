@@ -1,17 +1,32 @@
 import { Pool } from "pg";
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl:
-    process.env.NODE_ENV === "production"
-      ? { rejectUnauthorized: false }
-      : false,
-});
+const globalForPg = globalThis as unknown as { _pgPool: Pool | undefined };
 
-export const db = {
-  query: (text: string, params?: unknown[]) => pool.query(text, params),
-};
+const pool =
+  globalForPg._pgPool ??
+  new Pool({
+    connectionString: process.env.DATABASE_URL,
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
+  });
 
-export { pool };
+if (process.env.NODE_ENV !== "production") {
+  globalForPg._pgPool = pool;
+}
 
-export default pool;
+async function query<T = unknown>(
+  sql: string,
+  params: unknown[] = [],
+): Promise<
+  import("pg").QueryResult<T extends Record<string, unknown> ? T : never>
+> {
+  const client = await pool.connect();
+  try {
+    return await client.query(sql, params);
+  } finally {
+    client.release();
+  }
+}
+
+export { pool, query };
