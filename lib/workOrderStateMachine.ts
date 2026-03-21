@@ -1,28 +1,54 @@
-export type WorkOrderStatus =
-  | "open"
-  | "assigned"
-  | "in_progress"
-  | "completed"
-  | "cancelled";
+type WorkOrderStatus = "open" | "in_progress" | "completed" | "cancelled";
+type UserRole = "Supervisor" | "Technician" | "Admin" | string;
 
-const allowedTransitions: Record<WorkOrderStatus, WorkOrderStatus[]> = {
-  open: ["assigned", "cancelled"],
-  assigned: ["in_progress", "cancelled"],
-  in_progress: ["completed", "cancelled"],
-  completed: [],
-  cancelled: [],
-};
+interface TransitionRule {
+  from: WorkOrderStatus | "*";
+  to: WorkOrderStatus;
+  allowedRoles: UserRole[];
+}
+
+const transitionRules: TransitionRule[] = [
+  {
+    from: "open",
+    to: "in_progress",
+    allowedRoles: ["Supervisor", "Technician"],
+  },
+  {
+    from: "in_progress",
+    to: "completed",
+    allowedRoles: ["Technician"],
+  },
+  {
+    from: "*",
+    to: "cancelled",
+    allowedRoles: ["Supervisor"],
+  },
+];
 
 export function canTransition(
-  from: WorkOrderStatus,
-  to: WorkOrderStatus,
+  currentStatus: WorkOrderStatus,
+  newStatus: WorkOrderStatus,
+  role: UserRole,
 ): boolean {
-  const allowed = allowedTransitions[from];
-  return allowed.includes(to);
+  if (currentStatus === newStatus) {
+    return false;
+  }
+
+  if (currentStatus === "completed" || currentStatus === "cancelled") {
+    return false;
+  }
+
+  for (const rule of transitionRules) {
+    const fromMatches = rule.from === "*" || rule.from === currentStatus;
+    const toMatches = rule.to === newStatus;
+    const roleAllowed = rule.allowedRoles.includes(role);
+
+    if (fromMatches && toMatches && roleAllowed) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
-export function getAllowedTransitions(
-  status: WorkOrderStatus,
-): WorkOrderStatus[] {
-  return allowedTransitions[status];
-}
+export type { WorkOrderStatus, UserRole };

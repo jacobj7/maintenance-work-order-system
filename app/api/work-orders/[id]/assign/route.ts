@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { z } from "zod";
 import { Pool } from "pg";
 
@@ -10,7 +11,7 @@ const pool = new Pool({
 });
 
 const assignSchema = z.object({
-  technician_id: z.string().uuid(),
+  technician_id: z.string().uuid("technician_id must be a valid UUID"),
 });
 
 export async function POST(
@@ -18,15 +19,27 @@ export async function POST(
   { params }: { params: { id: string } },
 ) {
   try {
-    const session = await getServerSession();
+    const session = await getServerSession(authOptions);
+
     if (!session || !session.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json(
+        { error: "Unauthorized. Please sign in." },
+        { status: 401 },
+      );
+    }
+
+    const userRole = (session.user as { role?: string }).role;
+    if (userRole !== "supervisor") {
+      return NextResponse.json(
+        { error: "Forbidden. Supervisor role required." },
+        { status: 403 },
+      );
     }
 
     const workOrderId = params.id;
     if (!workOrderId) {
       return NextResponse.json(
-        { error: "Work order ID is required" },
+        { error: "Work order ID is required." },
         { status: 400 },
       );
     }
@@ -35,14 +48,20 @@ export async function POST(
     try {
       body = await request.json();
     } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Invalid JSON body." },
+        { status: 400 },
+      );
     }
 
     const parseResult = assignSchema.safeParse(body);
     if (!parseResult.success) {
       return NextResponse.json(
-        { error: "Validation failed", details: parseResult.error.flatten() },
-        { status: 400 },
+        {
+          error: "Validation failed.",
+          details: parseResult.error.flatten().fieldErrors,
+        },
+        { status: 422 },
       );
     }
 
@@ -50,103 +69,65 @@ export async function POST(
 
     const client = await pool.connect();
     try {
-      await client.query("BEGIN");
-
-      // Validate technician exists and has technician role
-      const technicianResult = await client.query(
-        `SELECT id, role FROM users WHERE id = $1`,
-        [technician_id],
-      );
-
-      if (technicianResult.rowCount === 0) {
-        await client.query("ROLLBACK");
-        return NextResponse.json(
-          { error: "Technician not found" },
-          { status: 404 },
-        );
-      }
-
-      const technician = technicianResult.rows[0];
-      if (technician.role !== "technician") {
-        await client.query("ROLLBACK");
-        return NextResponse.json(
-          { error: "User does not have technician role" },
-          { status: 400 },
-        );
-      }
-
-      // Validate work order exists
-      const workOrderResult = await client.query(
-        `SELECT id, status FROM work_orders WHERE id = $1`,
+      const workOrderCheck = await client.query(
+        "SELECT id FROM work_orders WHERE id = $1",
         [workOrderId],
       );
 
-      if (workOrderResult.rowCount === 0) {
-        await client.query("ROLLBACK");
+      if (workOrderCheck.rowCount === 0) {
         return NextResponse.json(
-          { error: "Work order not found" },
+          { error: "Work order not found." },
           { status: 404 },
         );
       }
 
-      const workOrder = workOrderResult.rows[0];
+      const technicianCheck = await client.query(
+        "SELECT id FROM users WHERE id = $1 AND role = 'technician'",
+        [technician_id],
+      );
 
-      // Insert into assignments table
-      const assignmentResult = await client.query(
-        `INSERT INTO assignments (work_order_id, technician_id, assigned_at)
-         VALUES ($1, $2, NOW())
-         RETURNING id, work_order_id, technician_id, assigned_at`,
+      if (technicianCheck.rowCount === 0) {
+        return NextResponse.json(
+          { error: "Technician not found or user is not a technician." },
+          { status: 404 },
+        );
+      }
+
+      const existingAssignment = await client.query(
+        "SELECT id FROM assignments WHERE work_order_id = $1 AND technician_id = $2",
         [workOrderId, technician_id],
       );
 
-      const assignment = assignmentResult.rows[0];
-
-      // Update work order status to 'assigned' if currently 'open'
-      let updatedStatus = workOrder.status;
-      if (workOrder.status === "open") {
-        await client.query(
-          `UPDATE work_orders SET status = 'assigned', updated_at = NOW() WHERE id = $1`,
-          [workOrderId],
+      if (existingAssignment.rowCount && existingAssignment.rowCount > 0) {
+        return NextResponse.json(
+          { error: "Technician is already assigned to this work order." },
+          { status: 409 },
         );
-        updatedStatus = "assigned";
       }
 
-      // Insert status_event
-      await client.query(
-        `INSERT INTO status_events (work_order_id, status, created_by, created_at, metadata)
-         VALUES ($1, $2, $3, NOW(), $4)`,
-        [
-          workOrderId,
-          updatedStatus,
-          session.user.email || session.user.name || "system",
-          JSON.stringify({
-            technician_id,
-            assignment_id: assignment.id,
-            action: "assign",
-          }),
-        ],
+      const insertResult = await client.query(
+        `INSERT INTO assignments (work_order_id, technician_id, assigned_by, assigned_at)
+         VALUES ($1, $2, $3, NOW())
+         RETURNING id, work_order_id, technician_id, assigned_by, assigned_at`,
+        [workOrderId, technician_id, session.user.email],
       );
 
-      await client.query("COMMIT");
+      const assignment = insertResult.rows[0];
 
       return NextResponse.json(
         {
-          message: "Technician assigned successfully",
+          message: "Technician successfully assigned to work order.",
           assignment,
-          work_order_status: updatedStatus,
         },
         { status: 201 },
       );
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
     } finally {
       client.release();
     }
   } catch (error) {
     console.error("Error assigning technician to work order:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Internal server error." },
       { status: 500 },
     );
   }

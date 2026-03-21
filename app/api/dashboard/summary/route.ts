@@ -6,80 +6,48 @@ import { pool } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const session = await getServerSession(authOptions);
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const client = await pool.connect();
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const statusCountsResult = await client.query<{
+      status: string;
+      count: string;
+    }>(`
+      SELECT status, COUNT(*) as count
+      FROM work_orders
+      GROUP BY status
+      ORDER BY status
+    `);
+
+    const overdueResult = await client.query<{ count: string }>(`
+      SELECT COUNT(*) as count
+      FROM work_orders
+      WHERE due_date < NOW()
+        AND status NOT IN ('completed', 'cancelled')
+    `);
+
+    const statusCounts: Record<string, number> = {};
+    for (const row of statusCountsResult.rows) {
+      statusCounts[row.status] = parseInt(row.count, 10);
     }
 
-    const client = await pool.connect();
+    const overdueCount = parseInt(overdueResult.rows[0]?.count ?? "0", 10);
 
-    try {
-      const totalOpenResult = await client.query(`
-        SELECT COUNT(*) as count
-        FROM tickets
-        WHERE status = 'open'
-      `);
-
-      const totalInProgressResult = await client.query(`
-        SELECT COUNT(*) as count
-        FROM tickets
-        WHERE status = 'in_progress'
-      `);
-
-      const totalCompletedThisMonthResult = await client.query(`
-        SELECT COUNT(*) as count
-        FROM tickets
-        WHERE status = 'completed'
-          AND DATE_TRUNC('month', updated_at) = DATE_TRUNC('month', CURRENT_DATE)
-      `);
-
-      const totalOverdueResult = await client.query(`
-        SELECT COUNT(*) as count
-        FROM tickets
-        WHERE status NOT IN ('completed', 'closed')
-          AND due_date < CURRENT_TIMESTAMP
-      `);
-
-      const technicianWorkloadResult = await client.query(`
-        SELECT
-          u.name AS technician_name,
-          COUNT(t.id) FILTER (WHERE t.status = 'open') AS assigned_count,
-          COUNT(t.id) FILTER (WHERE t.status = 'in_progress') AS in_progress_count
-        FROM users u
-        LEFT JOIN tickets t ON t.assigned_to = u.id
-        WHERE u.role = 'technician'
-        GROUP BY u.id, u.name
-        ORDER BY u.name ASC
-      `);
-
-      const summary = {
-        total_open: parseInt(totalOpenResult.rows[0]?.count ?? "0", 10),
-        total_in_progress: parseInt(
-          totalInProgressResult.rows[0]?.count ?? "0",
-          10,
-        ),
-        total_completed_this_month: parseInt(
-          totalCompletedThisMonthResult.rows[0]?.count ?? "0",
-          10,
-        ),
-        total_overdue: parseInt(totalOverdueResult.rows[0]?.count ?? "0", 10),
-        technician_workload: technicianWorkloadResult.rows.map((row) => ({
-          technician_name: row.technician_name,
-          assigned_count: parseInt(row.assigned_count ?? "0", 10),
-          in_progress_count: parseInt(row.in_progress_count ?? "0", 10),
-        })),
-      };
-
-      return NextResponse.json(summary);
-    } finally {
-      client.release();
-    }
+    return NextResponse.json({
+      statusCounts,
+      overdueCount,
+    });
   } catch (error) {
     console.error("Error fetching dashboard summary:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
     );
+  } finally {
+    client.release();
   }
 }
