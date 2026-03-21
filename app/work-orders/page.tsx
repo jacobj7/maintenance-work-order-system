@@ -1,55 +1,92 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { redirect } from "next/navigation";
-import { db } from "@/lib/db";
+import { Suspense } from "react";
 import WorkOrdersClient from "./WorkOrdersClient";
 
-export default async function WorkOrdersPage() {
-  const session = await getServerSession(authOptions);
+interface WorkOrder {
+  id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  priority: string;
+  assignee_id: string | null;
+  assignee_name: string | null;
+  created_at: string;
+  updated_at: string;
+  due_date: string | null;
+}
 
-  if (!session) {
-    redirect("/login");
+interface SearchParams {
+  status?: string;
+  priority?: string;
+  page?: string;
+}
+
+async function fetchWorkOrders(
+  searchParams: SearchParams,
+): Promise<WorkOrder[]> {
+  const params = new URLSearchParams();
+
+  if (searchParams.status) {
+    params.set("status", searchParams.status);
+  }
+  if (searchParams.priority) {
+    params.set("priority", searchParams.priority);
+  }
+  if (searchParams.page) {
+    params.set("page", searchParams.page);
   }
 
-  const result = await db.query(
-    `SELECT 
-      wo.id,
-      wo.title,
-      wo.description,
-      wo.status,
-      wo.priority,
-      wo.created_at,
-      wo.updated_at,
-      wo.assigned_to,
-      wo.created_by,
-      u.name AS assigned_to_name,
-      c.name AS created_by_name
-    FROM work_orders wo
-    LEFT JOIN users u ON wo.assigned_to = u.id
-    LEFT JOIN users c ON wo.created_by = c.id
-    ORDER BY wo.created_at DESC`,
-    [],
-  );
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const url = `${baseUrl}/api/work-orders${params.toString() ? `?${params.toString()}` : ""}`;
 
-  const workOrders = result.rows.map((row) => ({
-    id: row.id as string,
-    title: row.title as string,
-    description: row.description as string | null,
-    status: row.status as string,
-    priority: row.priority as string,
-    createdAt:
-      row.created_at instanceof Date
-        ? row.created_at.toISOString()
-        : String(row.created_at),
-    updatedAt:
-      row.updated_at instanceof Date
-        ? row.updated_at.toISOString()
-        : String(row.updated_at),
-    assignedTo: row.assigned_to as string | null,
-    assignedToName: row.assigned_to_name as string | null,
-    createdBy: row.created_by as string | null,
-    createdByName: row.created_by_name as string | null,
+  const response = await fetch(url, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch work orders: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data.workOrders ?? data ?? [];
+}
+
+interface PageProps {
+  searchParams: SearchParams;
+}
+
+export default async function WorkOrdersPage({ searchParams }: PageProps) {
+  let workOrders: WorkOrder[] = [];
+  let error: string | null = null;
+
+  try {
+    workOrders = await fetchWorkOrders(searchParams);
+  } catch (err) {
+    error = err instanceof Error ? err.message : "Failed to load work orders";
+  }
+
+  const serializedWorkOrders = workOrders.map((wo) => ({
+    id: wo.id,
+    title: wo.title,
+    description: wo.description ?? null,
+    status: wo.status,
+    priority: wo.priority,
+    assignee_id: wo.assignee_id ?? null,
+    assignee_name: wo.assignee_name ?? null,
+    created_at: wo.created_at,
+    updated_at: wo.updated_at,
+    due_date: wo.due_date ?? null,
   }));
 
-  return <WorkOrdersClient workOrders={workOrders} />;
+  return (
+    <Suspense
+      fallback={<div className="p-8 text-center">Loading work orders...</div>}
+    >
+      <WorkOrdersClient
+        workOrders={serializedWorkOrders}
+        initialStatus={searchParams.status ?? ""}
+        initialPriority={searchParams.priority ?? ""}
+        error={error}
+      />
+    </Suspense>
+  );
 }

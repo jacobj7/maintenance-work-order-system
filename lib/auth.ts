@@ -23,7 +23,7 @@ export const authOptions: NextAuthOptions = {
         const client = await pool.connect();
         try {
           const result = await client.query(
-            "SELECT id, name, email, role, password_hash FROM users WHERE email = $1",
+            "SELECT id, email, password_hash, role, name FROM users WHERE email = $1 LIMIT 1",
             [credentials.email],
           );
 
@@ -44,8 +44,8 @@ export const authOptions: NextAuthOptions = {
 
           return {
             id: String(user.id),
-            name: user.name,
             email: user.email,
+            name: user.name,
             role: user.role,
           };
         } finally {
@@ -54,6 +54,9 @@ export const authOptions: NextAuthOptions = {
       },
     }),
   ],
+  session: {
+    strategy: "jwt",
+  },
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
@@ -63,7 +66,7 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
     async session({ session, token }) {
-      if (token && session.user) {
+      if (session.user) {
         (session.user as any).id = token.id as string;
         (session.user as any).role = token.role as string;
       }
@@ -72,9 +75,6 @@ export const authOptions: NextAuthOptions = {
   },
   pages: {
     signIn: "/login",
-  },
-  session: {
-    strategy: "jwt",
   },
   secret: process.env.NEXTAUTH_SECRET,
 };

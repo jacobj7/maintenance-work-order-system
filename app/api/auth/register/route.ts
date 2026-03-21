@@ -10,62 +10,70 @@ const pool = new Pool({
 });
 
 const registerSchema = z.object({
+  name: z.string().min(1, "Name is required").max(100, "Name too long"),
   email: z.string().email("Invalid email address"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
-  name: z.string().min(1, "Name is required").optional(),
+  password: z
+    .string()
+    .min(8, "Password must be at least 8 characters")
+    .max(128, "Password too long"),
 });
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
 
-    const validationResult = registerSchema.safeParse(body);
-    if (!validationResult.success) {
+    const parseResult = registerSchema.safeParse(body);
+    if (!parseResult.success) {
       return NextResponse.json(
         {
           error: "Validation failed",
-          details: validationResult.error.flatten().fieldErrors,
+          details: parseResult.error.flatten().fieldErrors,
         },
         { status: 400 },
       );
     }
 
-    const { email, password, name } = validationResult.data;
+    const { name, email, password } = parseResult.data;
 
     const client = await pool.connect();
-
     try {
-      const existingUserResult = await client.query(
+      const existingUser = await client.query(
         "SELECT id FROM users WHERE email = $1",
         [email.toLowerCase()],
       );
 
-      if (existingUserResult.rows.length > 0) {
+      if (existingUser.rows.length > 0) {
         return NextResponse.json(
-          { error: "User with this email already exists" },
+          { error: "A user with this email already exists" },
           { status: 409 },
         );
       }
 
       const saltRounds = 12;
-      const passwordHash = await bcrypt.hash(password, saltRounds);
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-      const insertResult = await client.query(
-        `INSERT INTO users (email, password_hash, name, created_at, updated_at)
-         VALUES ($1, $2, $3, NOW(), NOW())
-         RETURNING id, email, name, created_at`,
-        [email.toLowerCase(), passwordHash, name || null],
+      const result = await client.query(
+        `INSERT INTO users (name, email, password, role, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, NOW(), NOW())
+         RETURNING id, name, email, role, created_at`,
+        [name, email.toLowerCase(), hashedPassword, "requestor"],
       );
 
-      const newUser = insertResult.rows[0];
+      const newUser = result.rows[0];
 
       return NextResponse.json(
         {
           message: "User registered successfully",
           user: {
             id: newUser.id,
-            email: newUser.email,
             name: newUser.name,
+            email: newUser.email,
+            role: newUser.role,
             createdAt: newUser.created_at,
           },
         },
@@ -76,14 +84,6 @@ export async function POST(request: NextRequest) {
     }
   } catch (error) {
     console.error("Registration error:", error);
-
-    if (error instanceof SyntaxError) {
-      return NextResponse.json(
-        { error: "Invalid JSON in request body" },
-        { status: 400 },
-      );
-    }
-
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },

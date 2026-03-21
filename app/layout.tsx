@@ -1,13 +1,11 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/Providers";
-
-const inter = Inter({ subsets: ["latin"] });
+import { NavSidebar } from "@/components/NavSidebar";
 
 export const metadata: Metadata = {
-  title: "App",
-  description: "Next.js App",
+  title: "AI App",
+  description: "AI-powered application",
 };
 
 export default function RootLayout({
@@ -17,8 +15,13 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={inter.className}>
-        <Providers>{children}</Providers>
+      <body>
+        <Providers>
+          <div className="flex min-h-screen">
+            <NavSidebar />
+            <main className="flex-1 overflow-auto">{children}</main>
+          </div>
+        </Providers>
       </body>
     </html>
   );

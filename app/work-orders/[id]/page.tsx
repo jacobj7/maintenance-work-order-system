@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import WorkOrderDetailClient from "./WorkOrderDetailClient";
 
-interface WorkOrderDetailPageProps {
+interface PageProps {
   params: { id: string };
 }
 
@@ -38,6 +38,16 @@ async function getWorkOrder(id: string) {
   return result.rows[0] || null;
 }
 
+async function getTechnicians() {
+  const result = await db.query(
+    `SELECT id, name, email, role
+     FROM users
+     WHERE role IN ('technician', 'admin')
+     ORDER BY name ASC`,
+  );
+  return result.rows;
+}
+
 async function getWorkOrderComments(workOrderId: string) {
   const result = await db.query(
     `SELECT 
@@ -45,7 +55,6 @@ async function getWorkOrderComments(workOrderId: string) {
       c.work_order_id,
       c.content,
       c.created_at,
-      c.updated_at,
       c.user_id,
       u.name AS user_name,
       u.email AS user_email
@@ -55,96 +64,69 @@ async function getWorkOrderComments(workOrderId: string) {
     ORDER BY c.created_at ASC`,
     [workOrderId],
   );
-
   return result.rows;
 }
 
-async function getTechnicians() {
-  const result = await db.query(
-    `SELECT 
-      id,
-      name,
-      email,
-      role
-    FROM users
-    WHERE role IN ('technician', 'admin')
-    ORDER BY name ASC`,
-  );
-
-  return result.rows;
-}
-
-function serializeWorkOrder(workOrder: Record<string, unknown>) {
+function serializeWorkOrder(wo: Record<string, unknown>) {
   return {
-    id: workOrder.id as string,
-    title: workOrder.title as string,
-    description: workOrder.description as string | null,
-    status: workOrder.status as string,
-    priority: workOrder.priority as string,
-    created_at: workOrder.created_at
-      ? (workOrder.created_at as Date).toISOString()
+    id: wo.id as string,
+    title: wo.title as string,
+    description: (wo.description as string) || null,
+    status: wo.status as string,
+    priority: wo.priority as string,
+    created_at: wo.created_at ? (wo.created_at as Date).toISOString() : null,
+    updated_at: wo.updated_at ? (wo.updated_at as Date).toISOString() : null,
+    due_date: wo.due_date ? (wo.due_date as Date).toISOString() : null,
+    completed_at: wo.completed_at
+      ? (wo.completed_at as Date).toISOString()
       : null,
-    updated_at: workOrder.updated_at
-      ? (workOrder.updated_at as Date).toISOString()
-      : null,
-    due_date: workOrder.due_date
-      ? (workOrder.due_date as Date).toISOString()
-      : null,
-    completed_at: workOrder.completed_at
-      ? (workOrder.completed_at as Date).toISOString()
-      : null,
-    location: workOrder.location as string | null,
-    notes: workOrder.notes as string | null,
-    created_by: workOrder.created_by as string | null,
-    assigned_to: workOrder.assigned_to as string | null,
-    creator_name: workOrder.creator_name as string | null,
-    creator_email: workOrder.creator_email as string | null,
-    assignee_name: workOrder.assignee_name as string | null,
-    assignee_email: workOrder.assignee_email as string | null,
+    location: (wo.location as string) || null,
+    notes: (wo.notes as string) || null,
+    created_by: (wo.created_by as string) || null,
+    assigned_to: (wo.assigned_to as string) || null,
+    creator_name: (wo.creator_name as string) || null,
+    creator_email: (wo.creator_email as string) || null,
+    assignee_name: (wo.assignee_name as string) || null,
+    assignee_email: (wo.assignee_email as string) || null,
   };
 }
 
-function serializeComments(comments: Record<string, unknown>[]) {
-  return comments.map((comment) => ({
+function serializeTechnician(tech: Record<string, unknown>) {
+  return {
+    id: tech.id as string,
+    name: (tech.name as string) || null,
+    email: tech.email as string,
+    role: tech.role as string,
+  };
+}
+
+function serializeComment(comment: Record<string, unknown>) {
+  return {
     id: comment.id as string,
     work_order_id: comment.work_order_id as string,
     content: comment.content as string,
     created_at: comment.created_at
       ? (comment.created_at as Date).toISOString()
       : null,
-    updated_at: comment.updated_at
-      ? (comment.updated_at as Date).toISOString()
-      : null,
-    user_id: comment.user_id as string | null,
-    user_name: comment.user_name as string | null,
-    user_email: comment.user_email as string | null,
-  }));
+    user_id: (comment.user_id as string) || null,
+    user_name: (comment.user_name as string) || null,
+    user_email: (comment.user_email as string) || null,
+  };
 }
 
-function serializeTechnicians(technicians: Record<string, unknown>[]) {
-  return technicians.map((tech) => ({
-    id: tech.id as string,
-    name: tech.name as string,
-    email: tech.email as string,
-    role: tech.role as string,
-  }));
-}
-
-export default async function WorkOrderDetailPage({
-  params,
-}: WorkOrderDetailPageProps) {
+export default async function WorkOrderDetailPage({ params }: PageProps) {
   const session = await getServerSession(authOptions);
 
   if (!session) {
     notFound();
   }
 
-  const workOrderId = params.id;
+  const { id } = params;
 
-  const [workOrder, comments, technicians] = await Promise.all([
-    getWorkOrder(workOrderId),
-    getWorkOrderComments(workOrderId),
+  const [workOrder, technicians, comments] = await Promise.all([
+    getWorkOrder(id),
     getTechnicians(),
+    getWorkOrderComments(id),
   ]);
 
   if (!workOrder) {
@@ -152,14 +134,14 @@ export default async function WorkOrderDetailPage({
   }
 
   const serializedWorkOrder = serializeWorkOrder(workOrder);
-  const serializedComments = serializeComments(comments);
-  const serializedTechnicians = serializeTechnicians(technicians);
+  const serializedTechnicians = technicians.map(serializeTechnician);
+  const serializedComments = comments.map(serializeComment);
 
   return (
     <WorkOrderDetailClient
       workOrder={serializedWorkOrder}
-      comments={serializedComments}
       technicians={serializedTechnicians}
+      comments={serializedComments}
       currentUserId={session.user?.id as string}
       currentUserRole={session.user?.role as string}
     />

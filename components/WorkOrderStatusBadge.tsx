@@ -1,63 +1,57 @@
-"use client";
-
 import React from "react";
 
-export type WorkOrderStatus =
-  | "Open"
-  | "In Progress"
-  | "Completed"
-  | "Cancelled";
+type WorkOrderStatus = "open" | "in_progress" | "completed" | "cancelled";
 
 interface WorkOrderStatusBadgeProps {
-  status: WorkOrderStatus | string;
+  status: WorkOrderStatus;
   className?: string;
 }
 
-const statusConfig: Record<string, { label: string; classes: string }> = {
-  Open: {
+const statusConfig: Record<
+  WorkOrderStatus,
+  { label: string; bgColor: string; textColor: string; borderColor: string }
+> = {
+  open: {
     label: "Open",
-    classes: "bg-blue-100 text-blue-800 border-blue-200",
+    bgColor: "bg-blue-100",
+    textColor: "text-blue-800",
+    borderColor: "border-blue-200",
   },
-  "In Progress": {
+  in_progress: {
     label: "In Progress",
-    classes: "bg-yellow-100 text-yellow-800 border-yellow-200",
+    bgColor: "bg-yellow-100",
+    textColor: "text-yellow-800",
+    borderColor: "border-yellow-200",
   },
-  Completed: {
+  completed: {
     label: "Completed",
-    classes: "bg-green-100 text-green-800 border-green-200",
+    bgColor: "bg-green-100",
+    textColor: "text-green-800",
+    borderColor: "border-green-200",
   },
-  Cancelled: {
+  cancelled: {
     label: "Cancelled",
-    classes: "bg-gray-100 text-gray-600 border-gray-200",
+    bgColor: "bg-gray-100",
+    textColor: "text-gray-800",
+    borderColor: "border-gray-200",
   },
-};
-
-const defaultConfig = {
-  label: "Unknown",
-  classes: "bg-gray-100 text-gray-600 border-gray-200",
 };
 
 export function WorkOrderStatusBadge({
   status,
   className = "",
-}: WorkOrderStatusBadgeProps) {
-  const config = statusConfig[status] ?? { ...defaultConfig, label: status };
+}: WorkOrderStatusBadgeProps): React.ReactElement {
+  const config = statusConfig[status] ?? {
+    label: status,
+    bgColor: "bg-gray-100",
+    textColor: "text-gray-800",
+    borderColor: "border-gray-200",
+  };
 
   return (
     <span
-      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${config.classes} ${className}`}
+      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${config.bgColor} ${config.textColor} ${config.borderColor} ${className}`}
     >
-      <span
-        className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
-          status === "Open"
-            ? "bg-blue-500"
-            : status === "In Progress"
-              ? "bg-yellow-500"
-              : status === "Completed"
-                ? "bg-green-500"
-                : "bg-gray-400"
-        }`}
-      />
       {config.label}
     </span>
   );

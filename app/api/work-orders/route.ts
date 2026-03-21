@@ -10,15 +10,17 @@ const pool = new Pool({
 });
 
 const createWorkOrderSchema = z.object({
-  title: z.string().min(1, "Title is required").max(255),
+  title: z.string().min(1, "Title is required"),
   description: z.string().optional(),
+  priority: z.enum(["low", "medium", "high", "critical"]).default("medium"),
   status: z
-    .enum(["pending", "in_progress", "completed", "cancelled"])
-    .default("pending"),
-  priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"),
-  location_id: z.number().int().positive().optional().nullable(),
-  assigned_user_id: z.number().int().positive().optional().nullable(),
-  due_date: z.string().datetime().optional().nullable(),
+    .enum(["open", "in_progress", "on_hold", "completed", "cancelled"])
+    .default("open"),
+  assigned_technician_id: z.number().int().positive().optional().nullable(),
+  location: z.string().optional().nullable(),
+  due_date: z.string().optional().nullable(),
+  asset_id: z.number().int().positive().optional().nullable(),
+  notes: z.string().optional().nullable(),
 });
 
 export async function GET(request: NextRequest) {
@@ -32,32 +34,17 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get("status");
     const priority = searchParams.get("priority");
 
-    const validStatuses = ["pending", "in_progress", "completed", "cancelled"];
-    const validPriorities = ["low", "medium", "high", "urgent"];
-
     const conditions: string[] = [];
     const values: unknown[] = [];
     let paramIndex = 1;
 
     if (status) {
-      if (!validStatuses.includes(status)) {
-        return NextResponse.json(
-          { error: "Invalid status value" },
-          { status: 400 },
-        );
-      }
       conditions.push(`wo.status = $${paramIndex}`);
       values.push(status);
       paramIndex++;
     }
 
     if (priority) {
-      if (!validPriorities.includes(priority)) {
-        return NextResponse.json(
-          { error: "Invalid priority value" },
-          { status: 400 },
-        );
-      }
       conditions.push(`wo.priority = $${paramIndex}`);
       values.push(priority);
       paramIndex++;
@@ -71,35 +58,43 @@ export async function GET(request: NextRequest) {
         wo.id,
         wo.title,
         wo.description,
-        wo.status,
         wo.priority,
+        wo.status,
+        wo.location,
         wo.due_date,
+        wo.asset_id,
+        wo.notes,
+        wo.assigned_technician_id,
         wo.created_at,
         wo.updated_at,
-        wo.location_id,
-        l.name AS location_name,
-        wo.assigned_user_id,
-        u.name AS assigned_user_name,
-        u.email AS assigned_user_email
+        u.name AS assigned_technician_name,
+        u.email AS assigned_technician_email
       FROM work_orders wo
-      LEFT JOIN locations l ON wo.location_id = l.id
-      LEFT JOIN users u ON wo.assigned_user_id = u.id
+      LEFT JOIN users u ON wo.assigned_technician_id = u.id
       ${whereClause}
-      ORDER BY wo.created_at DESC
+      ORDER BY
+        CASE wo.priority
+          WHEN 'critical' THEN 1
+          WHEN 'high' THEN 2
+          WHEN 'medium' THEN 3
+          WHEN 'low' THEN 4
+          ELSE 5
+        END,
+        wo.created_at DESC
     `;
 
     const client = await pool.connect();
     try {
       const result = await client.query(query, values);
       return NextResponse.json({
-        data: result.rows,
-        count: result.rowCount,
+        work_orders: result.rows,
+        total: result.rowCount,
       });
     } finally {
       client.release();
     }
   } catch (error) {
-    console.error("GET /api/work-orders error:", error);
+    console.error("Error fetching work orders:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
@@ -114,104 +109,96 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-    }
+    const body = await request.json();
+    const validationResult = createWorkOrderSchema.safeParse(body);
 
-    const parseResult = createWorkOrderSchema.safeParse(body);
-    if (!parseResult.success) {
+    if (!validationResult.success) {
       return NextResponse.json(
         {
           error: "Validation failed",
-          details: parseResult.error.flatten(),
+          details: validationResult.error.flatten(),
         },
-        { status: 422 },
+        { status: 400 },
       );
     }
 
-    const {
-      title,
-      description,
-      status,
-      priority,
-      location_id,
-      assigned_user_id,
-      due_date,
-    } = parseResult.data;
+    const data = validationResult.data;
 
     const client = await pool.connect();
     try {
-      const insertQuery = `
+      await client.query("BEGIN");
+
+      const insertWorkOrderQuery = `
         INSERT INTO work_orders (
           title,
           description,
-          status,
           priority,
-          location_id,
-          assigned_user_id,
+          status,
+          assigned_technician_id,
+          location,
           due_date,
+          asset_id,
+          notes,
           created_at,
           updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9,
+          NOW(), NOW()
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-        RETURNING
-          id,
-          title,
-          description,
+        RETURNING *
+      `;
+
+      const workOrderResult = await client.query(insertWorkOrderQuery, [
+        data.title,
+        data.description ?? null,
+        data.priority,
+        data.status,
+        data.assigned_technician_id ?? null,
+        data.location ?? null,
+        data.due_date ?? null,
+        data.asset_id ?? null,
+        data.notes ?? null,
+      ]);
+
+      const newWorkOrder = workOrderResult.rows[0];
+
+      const insertStatusHistoryQuery = `
+        INSERT INTO status_history (
+          work_order_id,
           status,
-          priority,
-          location_id,
-          assigned_user_id,
-          due_date,
-          created_at,
-          updated_at
+          changed_by,
+          changed_at,
+          notes
+        ) VALUES (
+          $1, $2, $3, NOW(), $4
+        )
+        RETURNING *
       `;
 
-      const insertValues = [
-        title,
-        description ?? null,
-        status,
-        priority,
-        location_id ?? null,
-        assigned_user_id ?? null,
-        due_date ?? null,
-      ];
+      const statusHistoryResult = await client.query(insertStatusHistoryQuery, [
+        newWorkOrder.id,
+        data.status,
+        session.user?.email ?? "system",
+        `Initial status set to ${data.status}`,
+      ]);
 
-      const insertResult = await client.query(insertQuery, insertValues);
-      const newWorkOrder = insertResult.rows[0];
+      await client.query("COMMIT");
 
-      const enrichQuery = `
-        SELECT
-          wo.id,
-          wo.title,
-          wo.description,
-          wo.status,
-          wo.priority,
-          wo.due_date,
-          wo.created_at,
-          wo.updated_at,
-          wo.location_id,
-          l.name AS location_name,
-          wo.assigned_user_id,
-          u.name AS assigned_user_name,
-          u.email AS assigned_user_email
-        FROM work_orders wo
-        LEFT JOIN locations l ON wo.location_id = l.id
-        LEFT JOIN users u ON wo.assigned_user_id = u.id
-        WHERE wo.id = $1
-      `;
-
-      const enrichResult = await client.query(enrichQuery, [newWorkOrder.id]);
-
-      return NextResponse.json({ data: enrichResult.rows[0] }, { status: 201 });
+      return NextResponse.json(
+        {
+          work_order: newWorkOrder,
+          status_history: statusHistoryResult.rows[0],
+        },
+        { status: 201 },
+      );
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
     } finally {
       client.release();
     }
   } catch (error) {
-    console.error("POST /api/work-orders error:", error);
+    console.error("Error creating work order:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
