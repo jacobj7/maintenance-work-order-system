@@ -1,163 +1,179 @@
 export type WorkOrderStatus =
   | "open"
   | "in_progress"
+  | "on_hold"
   | "completed"
   | "cancelled";
-export type WorkOrderPriority = "low" | "medium" | "high" | "critical";
-export type UserRole = "admin" | "technician" | "requester";
-export type AssetStatus = "active" | "inactive" | "maintenance" | "retired";
 
-export interface Organization {
-  id: string;
-  name: string;
-  slug: string;
-  created_at: Date;
-  updated_at: Date;
-}
+export type WorkOrderPriority = "low" | "medium" | "high" | "critical";
+
+export type WorkOrderCategory =
+  | "electrical"
+  | "plumbing"
+  | "hvac"
+  | "structural"
+  | "equipment"
+  | "safety"
+  | "cleaning"
+  | "landscaping"
+  | "it"
+  | "other";
+
+export type UserRole = "admin" | "manager" | "technician" | "requester";
 
 export interface User {
   id: string;
-  organization_id: string;
+  name: string | null;
   email: string;
-  name: string;
   role: UserRole;
-  avatar_url?: string | null;
-  created_at: Date;
-  updated_at: Date;
+  department?: string | null;
+  phone?: string | null;
+  avatar?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface Location {
   id: string;
-  organization_id: string;
   name: string;
+  building?: string | null;
+  floor?: string | null;
+  room?: string | null;
   address?: string | null;
-  parent_location_id?: string | null;
-  created_at: Date;
-  updated_at: Date;
-}
-
-export interface Asset {
-  id: string;
-  organization_id: string;
-  location_id?: string | null;
-  name: string;
-  description?: string | null;
-  asset_tag?: string | null;
-  serial_number?: string | null;
-  model?: string | null;
-  manufacturer?: string | null;
-  status: AssetStatus;
-  purchase_date?: Date | null;
-  warranty_expiry?: Date | null;
-  metadata?: Record<string, unknown> | null;
-  created_at: Date;
-  updated_at: Date;
-  location?: Location | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface WorkOrder {
   id: string;
-  organization_id: string;
   title: string;
-  description?: string | null;
+  description: string;
   status: WorkOrderStatus;
   priority: WorkOrderPriority;
-  asset_id?: string | null;
-  location_id?: string | null;
-  requester_id?: string | null;
-  assignee_id?: string | null;
-  due_date?: Date | null;
-  completed_at?: Date | null;
-  estimated_hours?: number | null;
-  actual_hours?: number | null;
-  metadata?: Record<string, unknown> | null;
-  created_at: Date;
-  updated_at: Date;
-  asset?: Asset | null;
+  category: WorkOrderCategory;
+  requestedById: string;
+  requestedBy?: User;
+  assignedToId?: string | null;
+  assignedTo?: User | null;
+  locationId?: string | null;
   location?: Location | null;
-  requester?: User | null;
-  assignee?: User | null;
-  status_updates?: StatusUpdate[];
+  estimatedHours?: number | null;
+  actualHours?: number | null;
+  estimatedCost?: number | null;
+  actualCost?: number | null;
+  dueDate?: Date | null;
+  startedAt?: Date | null;
+  completedAt?: Date | null;
+  notes?: string | null;
+  attachments?: Attachment[];
+  comments?: Comment[];
+  createdAt: Date;
+  updatedAt: Date;
 }
 
-export interface StatusUpdate {
+export interface Attachment {
   id: string;
-  work_order_id: string;
-  user_id?: string | null;
-  old_status?: WorkOrderStatus | null;
-  new_status: WorkOrderStatus;
-  comment?: string | null;
-  ai_generated?: boolean;
-  created_at: Date;
-  user?: User | null;
+  workOrderId: string;
+  fileName: string;
+  fileUrl: string;
+  fileSize: number;
+  mimeType: string;
+  uploadedById: string;
+  uploadedBy?: User;
+  createdAt: Date;
 }
 
-export interface TechnicianWithCount {
+export interface Comment {
   id: string;
-  name: string;
-  email: string;
-  avatar_url?: string | null;
-  role: UserRole;
-  organization_id: string;
-  open_work_orders: number;
-  in_progress_work_orders: number;
-  completed_work_orders: number;
-  total_work_orders: number;
-  created_at: Date;
-  updated_at: Date;
-}
-
-export interface DashboardSummary {
-  total_work_orders: number;
-  open_work_orders: number;
-  in_progress_work_orders: number;
-  completed_work_orders: number;
-  cancelled_work_orders: number;
-  critical_work_orders: number;
-  high_priority_work_orders: number;
-  overdue_work_orders: number;
-  total_assets: number;
-  active_assets: number;
-  assets_in_maintenance: number;
-  total_technicians: number;
-  recent_work_orders: WorkOrder[];
-  work_orders_by_priority: {
-    priority: WorkOrderPriority;
-    count: number;
-  }[];
-  work_orders_by_status: {
-    status: WorkOrderStatus;
-    count: number;
-  }[];
+  workOrderId: string;
+  authorId: string;
+  author?: User;
+  content: string;
+  isInternal: boolean;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface WorkOrderFilters {
   status?: WorkOrderStatus | WorkOrderStatus[];
   priority?: WorkOrderPriority | WorkOrderPriority[];
-  assignee_id?: string;
-  requester_id?: string;
-  asset_id?: string;
-  location_id?: string;
+  category?: WorkOrderCategory | WorkOrderCategory[];
+  assignedToId?: string;
+  requestedById?: string;
+  locationId?: string;
   search?: string;
-  due_before?: Date;
-  due_after?: Date;
-  page?: number;
-  limit?: number;
-  sort_by?: keyof WorkOrder;
-  sort_order?: "asc" | "desc";
+  dueDateFrom?: Date;
+  dueDateTo?: Date;
+  createdFrom?: Date;
+  createdTo?: Date;
+}
+
+export interface PaginationParams {
+  page: number;
+  pageSize: number;
 }
 
 export interface PaginatedResult<T> {
   data: T[];
   total: number;
   page: number;
-  limit: number;
-  total_pages: number;
+  pageSize: number;
+  totalPages: number;
 }
 
-export interface ApiResponse<T = unknown> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  message?: string;
+export interface WorkOrderStats {
+  total: number;
+  open: number;
+  inProgress: number;
+  onHold: number;
+  completed: number;
+  cancelled: number;
+  overdue: number;
+  criticalOpen: number;
+}
+
+export interface AIAnalysis {
+  suggestedPriority: WorkOrderPriority;
+  suggestedCategory: WorkOrderCategory;
+  estimatedHours: number;
+  summary: string;
+  recommendations: string[];
+  riskFactors: string[];
+}
+
+export interface CreateWorkOrderInput {
+  title: string;
+  description: string;
+  priority: WorkOrderPriority;
+  category: WorkOrderCategory;
+  locationId?: string;
+  assignedToId?: string;
+  estimatedHours?: number;
+  estimatedCost?: number;
+  dueDate?: Date;
+  notes?: string;
+}
+
+export interface UpdateWorkOrderInput {
+  title?: string;
+  description?: string;
+  status?: WorkOrderStatus;
+  priority?: WorkOrderPriority;
+  category?: WorkOrderCategory;
+  locationId?: string | null;
+  assignedToId?: string | null;
+  estimatedHours?: number | null;
+  actualHours?: number | null;
+  estimatedCost?: number | null;
+  actualCost?: number | null;
+  dueDate?: Date | null;
+  notes?: string | null;
+}
+
+export interface SessionUser {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+  role: UserRole;
+  image?: string | null;
 }

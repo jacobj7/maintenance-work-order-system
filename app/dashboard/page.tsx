@@ -1,50 +1,8 @@
 import { getServerSession } from "next-auth";
-import { redirect } from "next/navigation";
 import { authOptions } from "@/lib/auth";
-import Navbar from "@/components/Navbar";
+import { redirect } from "next/navigation";
+import { db } from "@/lib/db";
 import DashboardClient from "./DashboardClient";
-
-interface SummaryData {
-  totalUsers: number;
-  totalProjects: number;
-  totalTasks: number;
-  completedTasks: number;
-  pendingTasks: number;
-  activeProjects: number;
-}
-
-async function fetchSummaryData(): Promise<SummaryData> {
-  try {
-    const baseUrl =
-      process.env.NEXTAUTH_URL ||
-      process.env.NEXT_PUBLIC_APP_URL ||
-      "http://localhost:3000";
-
-    const response = await fetch(`${baseUrl}/api/dashboard/summary`, {
-      cache: "no-store",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch summary data: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Error fetching dashboard summary:", error);
-    return {
-      totalUsers: 0,
-      totalProjects: 0,
-      totalTasks: 0,
-      completedTasks: 0,
-      pendingTasks: 0,
-      activeProjects: 0,
-    };
-  }
-}
 
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
@@ -53,28 +11,67 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  const summaryData = await fetchSummaryData();
+  const statusCountsResult = await db.query(
+    `SELECT status, COUNT(*)::int AS count
+     FROM work_orders
+     GROUP BY status
+     ORDER BY status`,
+  );
 
-  const totalUsers: number = Number(summaryData.totalUsers) || 0;
-  const totalProjects: number = Number(summaryData.totalProjects) || 0;
-  const totalTasks: number = Number(summaryData.totalTasks) || 0;
-  const completedTasks: number = Number(summaryData.completedTasks) || 0;
-  const pendingTasks: number = Number(summaryData.pendingTasks) || 0;
-  const activeProjects: number = Number(summaryData.activeProjects) || 0;
+  const overdueResult = await db.query(
+    `SELECT
+       id,
+       title,
+       status,
+       priority,
+       target_date,
+       assigned_to,
+       created_at
+     FROM work_orders
+     WHERE target_date < NOW()
+       AND status != 'Completed'
+     ORDER BY target_date ASC
+     LIMIT 50`,
+  );
+
+  const statusCounts: { status: string; count: number }[] =
+    statusCountsResult.rows.map((row) => ({
+      status: String(row.status),
+      count: Number(row.count),
+    }));
+
+  const overdueWorkOrders: {
+    id: string;
+    title: string;
+    status: string;
+    priority: string;
+    target_date: string;
+    assigned_to: string | null;
+    created_at: string;
+  }[] = overdueResult.rows.map((row) => ({
+    id: String(row.id),
+    title: String(row.title),
+    status: String(row.status),
+    priority: String(row.priority),
+    target_date:
+      row.target_date instanceof Date
+        ? row.target_date.toISOString()
+        : String(row.target_date),
+    assigned_to: row.assigned_to != null ? String(row.assigned_to) : null,
+    created_at:
+      row.created_at instanceof Date
+        ? row.created_at.toISOString()
+        : String(row.created_at),
+  }));
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Navbar />
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <DashboardClient
-          totalUsers={totalUsers}
-          totalProjects={totalProjects}
-          totalTasks={totalTasks}
-          completedTasks={completedTasks}
-          pendingTasks={pendingTasks}
-          activeProjects={activeProjects}
-        />
-      </main>
-    </div>
+    <DashboardClient
+      statusCounts={statusCounts}
+      overdueWorkOrders={overdueWorkOrders}
+      user={{
+        name: session.user?.name ?? null,
+        email: session.user?.email ?? null,
+      }}
+    />
   );
 }

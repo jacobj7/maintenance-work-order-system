@@ -13,15 +13,12 @@ const createWorkOrderSchema = z.object({
   title: z.string().min(1, "Title is required").max(255),
   description: z.string().optional(),
   status: z
-    .enum(["open", "in_progress", "on_hold", "completed", "cancelled"])
-    .default("open"),
-  priority: z.enum(["low", "medium", "high", "critical"]).default("medium"),
-  asset_id: z.number().int().positive().optional().nullable(),
+    .enum(["pending", "in_progress", "completed", "cancelled"])
+    .default("pending"),
+  priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"),
   location_id: z.number().int().positive().optional().nullable(),
-  assigned_to: z.number().int().positive().optional().nullable(),
+  assigned_user_id: z.number().int().positive().optional().nullable(),
   due_date: z.string().datetime().optional().nullable(),
-  estimated_hours: z.number().positive().optional().nullable(),
-  notes: z.string().optional().nullable(),
 });
 
 export async function GET(request: NextRequest) {
@@ -34,48 +31,42 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const status = searchParams.get("status");
     const priority = searchParams.get("priority");
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
-    const limit = Math.min(
-      100,
-      Math.max(1, parseInt(searchParams.get("limit") || "20", 10)),
-    );
-    const offset = (page - 1) * limit;
 
-    const validStatuses = [
-      "open",
-      "in_progress",
-      "on_hold",
-      "completed",
-      "cancelled",
-    ];
-    const validPriorities = ["low", "medium", "high", "critical"];
+    const validStatuses = ["pending", "in_progress", "completed", "cancelled"];
+    const validPriorities = ["low", "medium", "high", "urgent"];
 
     const conditions: string[] = [];
-    const params: (string | number)[] = [];
+    const values: unknown[] = [];
     let paramIndex = 1;
 
-    if (status && validStatuses.includes(status)) {
+    if (status) {
+      if (!validStatuses.includes(status)) {
+        return NextResponse.json(
+          { error: "Invalid status value" },
+          { status: 400 },
+        );
+      }
       conditions.push(`wo.status = $${paramIndex}`);
-      params.push(status);
+      values.push(status);
       paramIndex++;
     }
 
-    if (priority && validPriorities.includes(priority)) {
+    if (priority) {
+      if (!validPriorities.includes(priority)) {
+        return NextResponse.json(
+          { error: "Invalid priority value" },
+          { status: 400 },
+        );
+      }
       conditions.push(`wo.priority = $${paramIndex}`);
-      params.push(priority);
+      values.push(priority);
       paramIndex++;
     }
 
     const whereClause =
       conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const countQuery = `
-      SELECT COUNT(*) as total
-      FROM work_orders wo
-      ${whereClause}
-    `;
-
-    const dataQuery = `
+    const query = `
       SELECT
         wo.id,
         wo.title,
@@ -83,88 +74,32 @@ export async function GET(request: NextRequest) {
         wo.status,
         wo.priority,
         wo.due_date,
-        wo.estimated_hours,
-        wo.notes,
         wo.created_at,
         wo.updated_at,
-        wo.assigned_to,
-        a.id as asset_id,
-        a.name as asset_name,
-        a.asset_tag,
-        a.type as asset_type,
-        l.id as location_id,
-        l.name as location_name,
-        l.address as location_address
+        wo.location_id,
+        l.name AS location_name,
+        wo.assigned_user_id,
+        u.name AS assigned_user_name,
+        u.email AS assigned_user_email
       FROM work_orders wo
-      LEFT JOIN assets a ON wo.asset_id = a.id
       LEFT JOIN locations l ON wo.location_id = l.id
+      LEFT JOIN users u ON wo.assigned_user_id = u.id
       ${whereClause}
-      ORDER BY
-        CASE wo.priority
-          WHEN 'critical' THEN 1
-          WHEN 'high' THEN 2
-          WHEN 'medium' THEN 3
-          WHEN 'low' THEN 4
-        END,
-        wo.created_at DESC
-      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+      ORDER BY wo.created_at DESC
     `;
 
     const client = await pool.connect();
     try {
-      const [countResult, dataResult] = await Promise.all([
-        client.query(countQuery, params),
-        client.query(dataQuery, [...params, limit, offset]),
-      ]);
-
-      const total = parseInt(countResult.rows[0].total, 10);
-      const totalPages = Math.ceil(total / limit);
-
-      const workOrders = dataResult.rows.map((row) => ({
-        id: row.id,
-        title: row.title,
-        description: row.description,
-        status: row.status,
-        priority: row.priority,
-        due_date: row.due_date,
-        estimated_hours: row.estimated_hours,
-        notes: row.notes,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-        assigned_to: row.assigned_to,
-        asset: row.asset_id
-          ? {
-              id: row.asset_id,
-              name: row.asset_name,
-              asset_tag: row.asset_tag,
-              type: row.asset_type,
-            }
-          : null,
-        location: row.location_id
-          ? {
-              id: row.location_id,
-              name: row.location_name,
-              address: row.location_address,
-            }
-          : null,
-      }));
-
+      const result = await client.query(query, values);
       return NextResponse.json({
-        data: workOrders,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages,
-          hasNextPage: page < totalPages,
-          hasPreviousPage: page > 1,
-        },
+        data: result.rows,
+        count: result.rowCount,
       });
     } finally {
       client.release();
     }
   } catch (error) {
-    console.error("Error fetching work orders:", error);
+    console.error("GET /api/work-orders error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
@@ -186,108 +121,97 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
-    const validationResult = createWorkOrderSchema.safeParse(body);
-    if (!validationResult.success) {
+    const parseResult = createWorkOrderSchema.safeParse(body);
+    if (!parseResult.success) {
       return NextResponse.json(
         {
           error: "Validation failed",
-          details: validationResult.error.flatten(),
+          details: parseResult.error.flatten(),
         },
         { status: 422 },
       );
     }
 
-    const data = validationResult.data;
-
-    const insertQuery = `
-      INSERT INTO work_orders (
-        title,
-        description,
-        status,
-        priority,
-        asset_id,
-        location_id,
-        assigned_to,
-        due_date,
-        estimated_hours,
-        notes,
-        created_at,
-        updated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW()
-      )
-      RETURNING
-        id,
-        title,
-        description,
-        status,
-        priority,
-        asset_id,
-        location_id,
-        assigned_to,
-        due_date,
-        estimated_hours,
-        notes,
-        created_at,
-        updated_at
-    `;
-
-    const insertParams = [
-      data.title,
-      data.description ?? null,
-      data.status,
-      data.priority,
-      data.asset_id ?? null,
-      data.location_id ?? null,
-      data.assigned_to ?? null,
-      data.due_date ?? null,
-      data.estimated_hours ?? null,
-      data.notes ?? null,
-    ];
+    const {
+      title,
+      description,
+      status,
+      priority,
+      location_id,
+      assigned_user_id,
+      due_date,
+    } = parseResult.data;
 
     const client = await pool.connect();
     try {
-      const result = await client.query(insertQuery, insertParams);
-      const newWorkOrder = result.rows[0];
+      const insertQuery = `
+        INSERT INTO work_orders (
+          title,
+          description,
+          status,
+          priority,
+          location_id,
+          assigned_user_id,
+          due_date,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+        RETURNING
+          id,
+          title,
+          description,
+          status,
+          priority,
+          location_id,
+          assigned_user_id,
+          due_date,
+          created_at,
+          updated_at
+      `;
 
-      let asset = null;
-      let location = null;
+      const insertValues = [
+        title,
+        description ?? null,
+        status,
+        priority,
+        location_id ?? null,
+        assigned_user_id ?? null,
+        due_date ?? null,
+      ];
 
-      if (newWorkOrder.asset_id) {
-        const assetResult = await client.query(
-          "SELECT id, name, asset_tag, type FROM assets WHERE id = $1",
-          [newWorkOrder.asset_id],
-        );
-        if (assetResult.rows.length > 0) {
-          asset = assetResult.rows[0];
-        }
-      }
+      const insertResult = await client.query(insertQuery, insertValues);
+      const newWorkOrder = insertResult.rows[0];
 
-      if (newWorkOrder.location_id) {
-        const locationResult = await client.query(
-          "SELECT id, name, address FROM locations WHERE id = $1",
-          [newWorkOrder.location_id],
-        );
-        if (locationResult.rows.length > 0) {
-          location = locationResult.rows[0];
-        }
-      }
+      const enrichQuery = `
+        SELECT
+          wo.id,
+          wo.title,
+          wo.description,
+          wo.status,
+          wo.priority,
+          wo.due_date,
+          wo.created_at,
+          wo.updated_at,
+          wo.location_id,
+          l.name AS location_name,
+          wo.assigned_user_id,
+          u.name AS assigned_user_name,
+          u.email AS assigned_user_email
+        FROM work_orders wo
+        LEFT JOIN locations l ON wo.location_id = l.id
+        LEFT JOIN users u ON wo.assigned_user_id = u.id
+        WHERE wo.id = $1
+      `;
 
-      return NextResponse.json(
-        {
-          data: {
-            ...newWorkOrder,
-            asset,
-            location,
-          },
-        },
-        { status: 201 },
-      );
+      const enrichResult = await client.query(enrichQuery, [newWorkOrder.id]);
+
+      return NextResponse.json({ data: enrichResult.rows[0] }, { status: 201 });
     } finally {
       client.release();
     }
   } catch (error) {
-    console.error("Error creating work order:", error);
+    console.error("POST /api/work-orders error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
