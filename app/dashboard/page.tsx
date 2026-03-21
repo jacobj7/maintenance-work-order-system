@@ -11,67 +11,82 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  const statusCountsResult = await db.query(
-    `SELECT status, COUNT(*)::int AS count
-     FROM work_orders
-     GROUP BY status
-     ORDER BY status`,
-  );
+  let statusCounts = {
+    open: 0,
+    in_progress: 0,
+    completed: 0,
+    overdue: 0,
+  };
 
-  const overdueResult = await db.query(
-    `SELECT
-       id,
-       title,
-       status,
-       priority,
-       target_date,
-       assigned_to,
-       created_at
-     FROM work_orders
-     WHERE target_date < NOW()
-       AND status != 'Completed'
-     ORDER BY target_date ASC
-     LIMIT 50`,
-  );
+  let recentTickets: any[] = [];
+  let technicians: any[] = [];
 
-  const statusCounts: { status: string; count: number }[] =
-    statusCountsResult.rows.map((row) => ({
-      status: String(row.status),
-      count: Number(row.count),
-    }));
+  try {
+    const statusResult = await db.query(`
+      SELECT status, COUNT(*) as count
+      FROM tickets
+      GROUP BY status
+    `);
 
-  const overdueWorkOrders: {
-    id: string;
-    title: string;
-    status: string;
-    priority: string;
-    target_date: string;
-    assigned_to: string | null;
-    created_at: string;
-  }[] = overdueResult.rows.map((row) => ({
-    id: String(row.id),
-    title: String(row.title),
-    status: String(row.status),
-    priority: String(row.priority),
-    target_date:
-      row.target_date instanceof Date
-        ? row.target_date.toISOString()
-        : String(row.target_date),
-    assigned_to: row.assigned_to != null ? String(row.assigned_to) : null,
-    created_at:
-      row.created_at instanceof Date
-        ? row.created_at.toISOString()
-        : String(row.created_at),
-  }));
+    for (const row of statusResult.rows) {
+      const status = row.status as string;
+      const count = parseInt(row.count, 10);
+      if (status === "open") statusCounts.open = count;
+      else if (status === "in_progress") statusCounts.in_progress = count;
+      else if (status === "completed") statusCounts.completed = count;
+      else if (status === "overdue") statusCounts.overdue = count;
+    }
+
+    const overdueResult = await db.query(`
+      SELECT COUNT(*) as count
+      FROM tickets
+      WHERE status NOT IN ('completed', 'cancelled')
+        AND due_date < NOW()
+    `);
+    statusCounts.overdue = parseInt(overdueResult.rows[0]?.count ?? "0", 10);
+
+    const ticketsResult = await db.query(`
+      SELECT
+        t.id,
+        t.title,
+        t.status,
+        t.priority,
+        t.created_at,
+        t.due_date,
+        u.name as customer_name,
+        tech.name as technician_name
+      FROM tickets t
+      LEFT JOIN users u ON t.customer_id = u.id
+      LEFT JOIN users tech ON t.technician_id = tech.id
+      ORDER BY t.created_at DESC
+      LIMIT 10
+    `);
+    recentTickets = ticketsResult.rows;
+
+    const techResult = await db.query(`
+      SELECT
+        u.id,
+        u.name,
+        u.email,
+        COUNT(t.id) as active_tickets
+      FROM users u
+      LEFT JOIN tickets t ON t.technician_id = u.id
+        AND t.status NOT IN ('completed', 'cancelled')
+      WHERE u.role = 'technician'
+      GROUP BY u.id, u.name, u.email
+      ORDER BY u.name
+    `);
+    technicians = techResult.rows;
+  } catch (error) {
+    console.error("Dashboard data fetch error:", error);
+  }
 
   return (
     <DashboardClient
+      session={session}
       statusCounts={statusCounts}
-      overdueWorkOrders={overdueWorkOrders}
-      user={{
-        name: session.user?.name ?? null,
-        email: session.user?.email ?? null,
-      }}
+      recentTickets={recentTickets}
+      technicians={technicians}
     />
   );
 }
