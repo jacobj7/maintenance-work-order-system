@@ -8,6 +8,9 @@ const pool = new Pool({
 });
 
 export const authOptions: NextAuthOptions = {
+  session: {
+    strategy: "jwt",
+  },
   providers: [
     CredentialsProvider({
       name: "Credentials",
@@ -23,7 +26,7 @@ export const authOptions: NextAuthOptions = {
         const client = await pool.connect();
         try {
           const result = await client.query(
-            "SELECT id, name, email, role, password_hash FROM users WHERE email = $1",
+            "SELECT id, email, password_hash, role FROM users WHERE email = $1",
             [credentials.email],
           );
 
@@ -44,7 +47,6 @@ export const authOptions: NextAuthOptions = {
 
           return {
             id: String(user.id),
-            name: user.name,
             email: user.email,
             role: user.role,
           };
@@ -69,9 +71,6 @@ export const authOptions: NextAuthOptions = {
       }
       return session;
     },
-  },
-  session: {
-    strategy: "jwt",
   },
   pages: {
     signIn: "/login",

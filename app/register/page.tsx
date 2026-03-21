@@ -10,10 +10,9 @@ export default function RegisterPage() {
     name: "",
     email: "",
     password: "",
-    role: "requestor",
+    role: "requester",
   });
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleChange = (
@@ -25,7 +24,6 @@ export default function RegisterPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    setSuccess("");
     setLoading(true);
 
     try {
@@ -39,12 +37,10 @@ export default function RegisterPage() {
 
       if (!res.ok) {
         setError(data.error || "Registration failed. Please try again.");
-      } else {
-        setSuccess("Registration successful! Redirecting to login...");
-        setTimeout(() => {
-          router.push("/login");
-        }, 2000);
+        return;
       }
+
+      router.push("/login");
     } catch (err) {
       setError("An unexpected error occurred. Please try again.");
     } finally {
@@ -71,18 +67,13 @@ export default function RegisterPage() {
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
-          {error && (
-            <div className="mb-4 rounded-md bg-red-50 p-4">
-              <p className="text-sm text-red-700">{error}</p>
-            </div>
-          )}
-          {success && (
-            <div className="mb-4 rounded-md bg-green-50 p-4">
-              <p className="text-sm text-green-700">{success}</p>
-            </div>
-          )}
-
           <form className="space-y-6" onSubmit={handleSubmit}>
+            {error && (
+              <div className="rounded-md bg-red-50 p-4">
+                <p className="text-sm text-red-700">{error}</p>
+              </div>
+            )}
+
             <div>
               <label
                 htmlFor="name"
@@ -148,7 +139,6 @@ export default function RegisterPage() {
                   minLength={8}
                 />
               </div>
-              <p className="mt-1 text-xs text-gray-500">Minimum 8 characters</p>
             </div>
 
             <div>
@@ -165,11 +155,11 @@ export default function RegisterPage() {
                   required
                   value={formData.role}
                   onChange={handleChange}
-                  className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm bg-white"
+                  className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm bg-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                 >
-                  <option value="requestor">Requestor</option>
+                  <option value="requester">Requester</option>
                   <option value="technician">Technician</option>
-                  <option value="manager">Manager</option>
+                  <option value="supervisor">Supervisor</option>
                 </select>
               </div>
             </div>
