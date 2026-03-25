@@ -15,7 +15,7 @@ interface WorkOrder {
 }
 
 interface PageClientProps {
-  initialWorkOrders: WorkOrder[];
+  initialWorkOrders?: WorkOrder[];
 }
 
 const STATUS_OPTIONS = [
