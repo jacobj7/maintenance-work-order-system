@@ -1,6 +1,13 @@
+"use client";
+
 import React from "react";
 
-type WorkOrderStatus = "open" | "in_progress" | "completed" | "cancelled";
+export type WorkOrderStatus =
+  | "open"
+  | "in_progress"
+  | "on_hold"
+  | "completed"
+  | "cancelled";
 
 interface WorkOrderStatusBadgeProps {
   status: WorkOrderStatus;
@@ -23,6 +30,12 @@ const statusConfig: Record<
     textColor: "text-yellow-800",
     borderColor: "border-yellow-200",
   },
+  on_hold: {
+    label: "On Hold",
+    bgColor: "bg-orange-100",
+    textColor: "text-orange-800",
+    borderColor: "border-orange-200",
+  },
   completed: {
     label: "Completed",
     bgColor: "bg-green-100",
@@ -40,7 +53,7 @@ const statusConfig: Record<
 export function WorkOrderStatusBadge({
   status,
   className = "",
-}: WorkOrderStatusBadgeProps): React.ReactElement {
+}: WorkOrderStatusBadgeProps) {
   const config = statusConfig[status] ?? {
     label: status,
     bgColor: "bg-gray-100",
@@ -52,6 +65,12 @@ export function WorkOrderStatusBadge({
     <span
       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${config.bgColor} ${config.textColor} ${config.borderColor} ${className}`}
     >
+      <span
+        className={`mr-1.5 h-1.5 w-1.5 rounded-full ${config.bgColor
+          .replace("bg-", "bg-")
+          .replace("-100", "-500")}`}
+        aria-hidden="true"
+      />
       {config.label}
     </span>
   );

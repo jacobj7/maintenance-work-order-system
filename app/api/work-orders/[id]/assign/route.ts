@@ -2,132 +2,77 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { z } from "zod";
-import { Pool } from "pg";
-
-export const dynamic = "force-dynamic";
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+import { query } from "@/lib/db";
 
 const assignSchema = z.object({
-  technician_id: z.string().uuid("technician_id must be a valid UUID"),
+  assigned_to: z.string().min(1, "Assignee is required"),
 });
 
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } },
 ) {
+  const session = await getServerSession(authOptions);
+
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (session.user.role !== "manager") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const workOrderId = params.id;
+
+  let body: unknown;
   try {
-    const session = await getServerSession(authOptions);
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
-    if (!session || !session.user) {
-      return NextResponse.json(
-        { error: "Unauthorized. Please sign in." },
-        { status: 401 },
-      );
-    }
-
-    const userRole = (session.user as { role?: string }).role;
-    if (userRole !== "supervisor") {
-      return NextResponse.json(
-        { error: "Forbidden. Supervisor role required." },
-        { status: 403 },
-      );
-    }
-
-    const workOrderId = params.id;
-    if (!workOrderId) {
-      return NextResponse.json(
-        { error: "Work order ID is required." },
-        { status: 400 },
-      );
-    }
-
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid JSON body." },
-        { status: 400 },
-      );
-    }
-
-    const parseResult = assignSchema.safeParse(body);
-    if (!parseResult.success) {
-      return NextResponse.json(
-        {
-          error: "Validation failed.",
-          details: parseResult.error.flatten().fieldErrors,
-        },
-        { status: 422 },
-      );
-    }
-
-    const { technician_id } = parseResult.data;
-
-    const client = await pool.connect();
-    try {
-      const workOrderCheck = await client.query(
-        "SELECT id FROM work_orders WHERE id = $1",
-        [workOrderId],
-      );
-
-      if (workOrderCheck.rowCount === 0) {
-        return NextResponse.json(
-          { error: "Work order not found." },
-          { status: 404 },
-        );
-      }
-
-      const technicianCheck = await client.query(
-        "SELECT id FROM users WHERE id = $1 AND role = 'technician'",
-        [technician_id],
-      );
-
-      if (technicianCheck.rowCount === 0) {
-        return NextResponse.json(
-          { error: "Technician not found or user is not a technician." },
-          { status: 404 },
-        );
-      }
-
-      const existingAssignment = await client.query(
-        "SELECT id FROM assignments WHERE work_order_id = $1 AND technician_id = $2",
-        [workOrderId, technician_id],
-      );
-
-      if (existingAssignment.rowCount && existingAssignment.rowCount > 0) {
-        return NextResponse.json(
-          { error: "Technician is already assigned to this work order." },
-          { status: 409 },
-        );
-      }
-
-      const insertResult = await client.query(
-        `INSERT INTO assignments (work_order_id, technician_id, assigned_by, assigned_at)
-         VALUES ($1, $2, $3, NOW())
-         RETURNING id, work_order_id, technician_id, assigned_by, assigned_at`,
-        [workOrderId, technician_id, session.user.email],
-      );
-
-      const assignment = insertResult.rows[0];
-
-      return NextResponse.json(
-        {
-          message: "Technician successfully assigned to work order.",
-          assignment,
-        },
-        { status: 201 },
-      );
-    } finally {
-      client.release();
-    }
-  } catch (error) {
-    console.error("Error assigning technician to work order:", error);
+  const validationResult = assignSchema.safeParse(body);
+  if (!validationResult.success) {
     return NextResponse.json(
-      { error: "Internal server error." },
+      { error: "Validation failed", details: validationResult.error.flatten() },
+      { status: 400 },
+    );
+  }
+
+  const { assigned_to } = validationResult.data;
+
+  try {
+    const workOrderCheck = await query(
+      "SELECT id FROM work_orders WHERE id = $1",
+      [workOrderId],
+    );
+
+    if (workOrderCheck.rows.length === 0) {
+      return NextResponse.json(
+        { error: "Work order not found" },
+        { status: 404 },
+      );
+    }
+
+    const result = await query(
+      `UPDATE work_orders
+       SET assigned_to = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING id, title, status, assigned_to, updated_at`,
+      [assigned_to, workOrderId],
+    );
+
+    return NextResponse.json(
+      {
+        message: "Work order assigned successfully",
+        workOrder: result.rows[0],
+      },
+      { status: 200 },
+    );
+  } catch (error) {
+    console.error("Error assigning work order:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
       { status: 500 },
     );
   }
