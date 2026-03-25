@@ -1,76 +1,56 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { z } from "zod";
-import { Pool } from "pg";
-
-export const dynamic = "force-dynamic";
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+import { query } from "@/lib/db";
 
 const partSchema = z.object({
-  part_name: z.string().min(1, "Part name is required"),
-  quantity: z.number().int().positive("Quantity must be a positive integer"),
-  unit_cost: z.number().positive("Unit cost must be a positive number"),
+  part_number: z.string().min(1),
+  description: z.string().min(1),
+  quantity: z.number().int().positive(),
+  unit_cost: z.number().nonnegative(),
+  supplier: z.string().optional(),
 });
 
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } },
 ) {
+  const session = await getServerSession(authOptions);
+
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const workOrderId = params.id;
+
   try {
-    const session = await getServerSession();
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const result = await query(
+      `SELECT p.*, 
+              (p.quantity * p.unit_cost) as total_cost
+       FROM parts_used p
+       WHERE p.work_order_id = $1
+       ORDER BY p.created_at DESC`,
+      [workOrderId],
+    );
 
-    const workOrderId = params.id;
-    if (!workOrderId) {
+    const workOrderCheck = await query(
+      `SELECT id FROM work_orders WHERE id = $1`,
+      [workOrderId],
+    );
+
+    if (workOrderCheck.rows.length === 0) {
       return NextResponse.json(
-        { error: "Work order ID is required" },
-        { status: 400 },
+        { error: "Work order not found" },
+        { status: 404 },
       );
     }
 
-    const client = await pool.connect();
-    try {
-      const workOrderCheck = await client.query(
-        "SELECT id FROM work_orders WHERE id = $1",
-        [workOrderId],
-      );
-
-      if (workOrderCheck.rows.length === 0) {
-        return NextResponse.json(
-          { error: "Work order not found" },
-          { status: 404 },
-        );
-      }
-
-      const result = await client.query(
-        `SELECT 
-          id,
-          work_order_id,
-          part_name,
-          quantity,
-          unit_cost,
-          (quantity * unit_cost) AS total_cost,
-          created_at,
-          updated_at
-        FROM parts_cost
-        WHERE work_order_id = $1
-        ORDER BY created_at DESC`,
-        [workOrderId],
-      );
-
-      return NextResponse.json({ parts: result.rows }, { status: 200 });
-    } finally {
-      client.release();
-    }
+    return NextResponse.json({ parts: result.rows });
   } catch (error) {
     console.error("Error fetching parts:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Failed to fetch parts" },
       { status: 500 },
     );
   }
@@ -80,74 +60,109 @@ export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } },
 ) {
-  try {
-    const session = await getServerSession();
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const session = await getServerSession(authOptions);
 
-    const workOrderId = params.id;
-    if (!workOrderId) {
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const workOrderId = params.id;
+
+  try {
+    const body = await request.json();
+    const validationResult = partSchema.safeParse(body);
+
+    if (!validationResult.success) {
       return NextResponse.json(
-        { error: "Work order ID is required" },
+        { error: "Invalid input", details: validationResult.error.flatten() },
         { status: 400 },
       );
     }
 
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-    }
+    const { part_number, description, quantity, unit_cost, supplier } =
+      validationResult.data;
 
-    const parseResult = partSchema.safeParse(body);
-    if (!parseResult.success) {
+    const workOrderCheck = await query(
+      `SELECT id FROM work_orders WHERE id = $1`,
+      [workOrderId],
+    );
+
+    if (workOrderCheck.rows.length === 0) {
       return NextResponse.json(
-        { error: "Validation failed", details: parseResult.error.flatten() },
-        { status: 422 },
+        { error: "Work order not found" },
+        { status: 404 },
       );
     }
 
-    const { part_name, quantity, unit_cost } = parseResult.data;
+    const result = await query(
+      `INSERT INTO parts_used (
+        work_order_id,
+        part_number,
+        description,
+        quantity,
+        unit_cost,
+        supplier,
+        added_by,
+        created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+      RETURNING *`,
+      [
+        workOrderId,
+        part_number,
+        description,
+        quantity,
+        unit_cost,
+        supplier || null,
+        session.user?.email,
+      ],
+    );
 
-    const client = await pool.connect();
-    try {
-      const workOrderCheck = await client.query(
-        "SELECT id FROM work_orders WHERE id = $1",
-        [workOrderId],
-      );
-
-      if (workOrderCheck.rows.length === 0) {
-        return NextResponse.json(
-          { error: "Work order not found" },
-          { status: 404 },
-        );
-      }
-
-      const result = await client.query(
-        `INSERT INTO parts_cost (work_order_id, part_name, quantity, unit_cost, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, NOW(), NOW())
-        RETURNING 
-          id,
-          work_order_id,
-          part_name,
-          quantity,
-          unit_cost,
-          (quantity * unit_cost) AS total_cost,
-          created_at,
-          updated_at`,
-        [workOrderId, part_name, quantity, unit_cost],
-      );
-
-      return NextResponse.json({ part: result.rows[0] }, { status: 201 });
-    } finally {
-      client.release();
-    }
+    return NextResponse.json({ part: result.rows[0] }, { status: 201 });
   } catch (error) {
-    console.error("Error creating part:", error);
+    console.error("Error adding part:", error);
+    return NextResponse.json({ error: "Failed to add part" }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { id: string } },
+) {
+  const session = await getServerSession(authOptions);
+
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const workOrderId = params.id;
+
+  try {
+    const { searchParams } = new URL(request.url);
+    const partId = searchParams.get("partId");
+
+    if (!partId) {
+      return NextResponse.json(
+        { error: "Part ID is required" },
+        { status: 400 },
+      );
+    }
+
+    const partCheck = await query(
+      `SELECT id FROM parts_used WHERE id = $1 AND work_order_id = $2`,
+      [partId, workOrderId],
+    );
+
+    if (partCheck.rows.length === 0) {
+      return NextResponse.json({ error: "Part not found" }, { status: 404 });
+    }
+
+    await query(`DELETE FROM parts_used WHERE id = $1`, [partId]);
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("Error deleting part:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Failed to delete part" },
       { status: 500 },
     );
   }
