@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { z } from "zod";
 import { Pool } from "pg";
 
@@ -11,7 +10,8 @@ const pool = new Pool({
 });
 
 const assignSchema = z.object({
-  technician_id: z.string().uuid("technician_id must be a valid UUID"),
+  technician_id: z.string().uuid("Invalid technician ID"),
+  notes: z.string().optional(),
 });
 
 export async function POST(
@@ -19,7 +19,7 @@ export async function POST(
   { params }: { params: { id: string } },
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getServerSession();
 
     if (!session || !session.user) {
       return NextResponse.json(
@@ -29,9 +29,9 @@ export async function POST(
     }
 
     const userRole = (session.user as { role?: string }).role;
-    if (userRole !== "supervisor") {
+    if (userRole !== "manager") {
       return NextResponse.json(
-        { error: "Forbidden. Supervisor role required." },
+        { error: "Forbidden. Manager role required." },
         { status: 403 },
       );
     }
@@ -59,22 +59,25 @@ export async function POST(
       return NextResponse.json(
         {
           error: "Validation failed.",
-          details: parseResult.error.flatten().fieldErrors,
+          details: parseResult.error.flatten(),
         },
         { status: 422 },
       );
     }
 
-    const { technician_id } = parseResult.data;
+    const { technician_id, notes } = parseResult.data;
 
     const client = await pool.connect();
     try {
+      await client.query("BEGIN");
+
       const workOrderCheck = await client.query(
         "SELECT id FROM work_orders WHERE id = $1",
         [workOrderId],
       );
 
       if (workOrderCheck.rowCount === 0) {
+        await client.query("ROLLBACK");
         return NextResponse.json(
           { error: "Work order not found." },
           { status: 404 },
@@ -82,45 +85,44 @@ export async function POST(
       }
 
       const technicianCheck = await client.query(
-        "SELECT id FROM users WHERE id = $1 AND role = 'technician'",
-        [technician_id],
+        "SELECT id FROM users WHERE id = $1 AND role = $2",
+        [technician_id, "technician"],
       );
 
       if (technicianCheck.rowCount === 0) {
+        await client.query("ROLLBACK");
         return NextResponse.json(
           { error: "Technician not found or user is not a technician." },
           { status: 404 },
         );
       }
 
-      const existingAssignment = await client.query(
-        "SELECT id FROM assignments WHERE work_order_id = $1 AND technician_id = $2",
-        [workOrderId, technician_id],
+      const assignmentResult = await client.query(
+        `INSERT INTO assignments (work_order_id, technician_id, notes, assigned_at, created_at, updated_at)
+         VALUES ($1, $2, $3, NOW(), NOW(), NOW())
+         RETURNING id, work_order_id, technician_id, notes, assigned_at, created_at, updated_at`,
+        [workOrderId, technician_id, notes ?? null],
       );
 
-      if (existingAssignment.rowCount && existingAssignment.rowCount > 0) {
-        return NextResponse.json(
-          { error: "Technician is already assigned to this work order." },
-          { status: 409 },
-        );
-      }
-
-      const insertResult = await client.query(
-        `INSERT INTO assignments (work_order_id, technician_id, assigned_by, assigned_at)
-         VALUES ($1, $2, $3, NOW())
-         RETURNING id, work_order_id, technician_id, assigned_by, assigned_at`,
-        [workOrderId, technician_id, session.user.email],
+      await client.query(
+        `UPDATE work_orders SET status = 'assigned', updated_at = NOW() WHERE id = $1`,
+        [workOrderId],
       );
 
-      const assignment = insertResult.rows[0];
+      await client.query("COMMIT");
+
+      const assignment = assignmentResult.rows[0];
 
       return NextResponse.json(
         {
-          message: "Technician successfully assigned to work order.",
+          message: "Technician assigned successfully.",
           assignment,
         },
         { status: 201 },
       );
+    } catch (dbError) {
+      await client.query("ROLLBACK");
+      throw dbError;
     } finally {
       client.release();
     }

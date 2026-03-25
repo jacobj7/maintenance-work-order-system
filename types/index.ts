@@ -1,3 +1,5 @@
+export type UserRole = "admin" | "technician" | "requester" | "viewer";
+
 export type WorkOrderStatus =
   | "open"
   | "in_progress"
@@ -7,173 +9,227 @@ export type WorkOrderStatus =
 
 export type WorkOrderPriority = "low" | "medium" | "high" | "critical";
 
-export type WorkOrderCategory =
-  | "electrical"
-  | "plumbing"
-  | "hvac"
-  | "structural"
-  | "equipment"
-  | "safety"
-  | "cleaning"
-  | "landscaping"
-  | "it"
-  | "other";
+export type WorkOrderType =
+  | "corrective"
+  | "preventive"
+  | "inspection"
+  | "emergency";
 
-export type UserRole = "admin" | "manager" | "technician" | "requester";
+export type AssetStatus =
+  | "active"
+  | "inactive"
+  | "under_maintenance"
+  | "retired";
+
+export type LocationType = "building" | "floor" | "room" | "area" | "zone";
 
 export interface User {
   id: string;
-  name: string | null;
   email: string;
+  name: string;
   role: UserRole;
-  department?: string | null;
-  phone?: string | null;
-  avatar?: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  department?: string;
+  phone?: string;
+  avatar_url?: string;
+  is_active: boolean;
+  created_at: Date;
+  updated_at: Date;
 }
 
 export interface Location {
   id: string;
   name: string;
-  building?: string | null;
-  floor?: string | null;
-  room?: string | null;
-  address?: string | null;
-  createdAt: Date;
-  updatedAt: Date;
+  type: LocationType;
+  parent_id?: string;
+  parent?: Location;
+  children?: Location[];
+  address?: string;
+  description?: string;
+  is_active: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface Asset {
+  id: string;
+  name: string;
+  asset_tag: string;
+  description?: string;
+  category?: string;
+  manufacturer?: string;
+  model?: string;
+  serial_number?: string;
+  status: AssetStatus;
+  location_id?: string;
+  location?: Location;
+  purchase_date?: Date;
+  purchase_cost?: number;
+  warranty_expiry?: Date;
+  last_maintenance_date?: Date;
+  next_maintenance_date?: Date;
+  specifications?: Record<string, unknown>;
+  is_active: boolean;
+  created_at: Date;
+  updated_at: Date;
 }
 
 export interface WorkOrder {
   id: string;
+  work_order_number: string;
   title: string;
-  description: string;
+  description?: string;
+  type: WorkOrderType;
   status: WorkOrderStatus;
   priority: WorkOrderPriority;
-  category: WorkOrderCategory;
-  requestedById: string;
-  requestedBy?: User;
-  assignedToId?: string | null;
-  assignedTo?: User | null;
-  locationId?: string | null;
-  location?: Location | null;
-  estimatedHours?: number | null;
-  actualHours?: number | null;
-  estimatedCost?: number | null;
-  actualCost?: number | null;
-  dueDate?: Date | null;
-  startedAt?: Date | null;
-  completedAt?: Date | null;
-  notes?: string | null;
+  asset_id?: string;
+  asset?: Asset;
+  location_id?: string;
+  location?: Location;
+  requested_by_id: string;
+  requested_by?: User;
+  assigned_to?: Assignment[];
+  due_date?: Date;
+  scheduled_start?: Date;
+  scheduled_end?: Date;
+  actual_start?: Date;
+  actual_end?: Date;
+  estimated_hours?: number;
+  actual_hours?: number;
+  estimated_cost?: number;
+  actual_cost?: number;
+  notes?: string;
   attachments?: Attachment[];
-  comments?: Comment[];
-  createdAt: Date;
-  updatedAt: Date;
+  status_updates?: StatusUpdate[];
+  parts_costs?: PartsCost[];
+  labor_entries?: LaborEntry[];
+  tags?: string[];
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface Assignment {
+  id: string;
+  work_order_id: string;
+  work_order?: WorkOrder;
+  user_id: string;
+  user?: User;
+  role?: string;
+  assigned_at: Date;
+  assigned_by_id?: string;
+  assigned_by?: User;
+  is_primary: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface StatusUpdate {
+  id: string;
+  work_order_id: string;
+  work_order?: WorkOrder;
+  previous_status?: WorkOrderStatus;
+  new_status: WorkOrderStatus;
+  comment?: string;
+  updated_by_id: string;
+  updated_by?: User;
+  created_at: Date;
+}
+
+export interface PartsCost {
+  id: string;
+  work_order_id: string;
+  work_order?: WorkOrder;
+  part_name: string;
+  part_number?: string;
+  description?: string;
+  quantity: number;
+  unit_cost: number;
+  total_cost: number;
+  supplier?: string;
+  purchase_date?: Date;
+  added_by_id?: string;
+  added_by?: User;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface LaborEntry {
+  id: string;
+  work_order_id: string;
+  work_order?: WorkOrder;
+  user_id: string;
+  user?: User;
+  description?: string;
+  hours: number;
+  hourly_rate?: number;
+  total_cost?: number;
+  work_date: Date;
+  start_time?: string;
+  end_time?: string;
+  is_overtime: boolean;
+  created_at: Date;
+  updated_at: Date;
 }
 
 export interface Attachment {
   id: string;
-  workOrderId: string;
-  fileName: string;
-  fileUrl: string;
-  fileSize: number;
-  mimeType: string;
-  uploadedById: string;
-  uploadedBy?: User;
-  createdAt: Date;
-}
-
-export interface Comment {
-  id: string;
-  workOrderId: string;
-  authorId: string;
-  author?: User;
-  content: string;
-  isInternal: boolean;
-  createdAt: Date;
-  updatedAt: Date;
+  work_order_id: string;
+  file_name: string;
+  file_url: string;
+  file_type?: string;
+  file_size?: number;
+  uploaded_by_id?: string;
+  uploaded_by?: User;
+  created_at: Date;
 }
 
 export interface WorkOrderFilters {
   status?: WorkOrderStatus | WorkOrderStatus[];
   priority?: WorkOrderPriority | WorkOrderPriority[];
-  category?: WorkOrderCategory | WorkOrderCategory[];
-  assignedToId?: string;
-  requestedById?: string;
-  locationId?: string;
+  type?: WorkOrderType | WorkOrderType[];
+  asset_id?: string;
+  location_id?: string;
+  assigned_to?: string;
+  requested_by?: string;
+  due_date_from?: Date;
+  due_date_to?: Date;
+  created_from?: Date;
+  created_to?: Date;
   search?: string;
-  dueDateFrom?: Date;
-  dueDateTo?: Date;
-  createdFrom?: Date;
-  createdTo?: Date;
+  tags?: string[];
 }
 
 export interface PaginationParams {
   page: number;
-  pageSize: number;
+  limit: number;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
 }
 
-export interface PaginatedResult<T> {
+export interface PaginatedResponse<T> {
   data: T[];
   total: number;
   page: number;
-  pageSize: number;
-  totalPages: number;
+  limit: number;
+  total_pages: number;
 }
 
-export interface WorkOrderStats {
-  total: number;
-  open: number;
-  inProgress: number;
-  onHold: number;
-  completed: number;
-  cancelled: number;
-  overdue: number;
-  criticalOpen: number;
+export interface DashboardStats {
+  total_work_orders: number;
+  open_work_orders: number;
+  in_progress_work_orders: number;
+  completed_work_orders: number;
+  overdue_work_orders: number;
+  critical_work_orders: number;
+  total_assets: number;
+  assets_under_maintenance: number;
+  total_labor_hours: number;
+  total_parts_cost: number;
+  total_labor_cost: number;
 }
 
-export interface AIAnalysis {
-  suggestedPriority: WorkOrderPriority;
-  suggestedCategory: WorkOrderCategory;
-  estimatedHours: number;
-  summary: string;
-  recommendations: string[];
-  riskFactors: string[];
-}
-
-export interface CreateWorkOrderInput {
-  title: string;
-  description: string;
-  priority: WorkOrderPriority;
-  category: WorkOrderCategory;
-  locationId?: string;
-  assignedToId?: string;
-  estimatedHours?: number;
-  estimatedCost?: number;
-  dueDate?: Date;
-  notes?: string;
-}
-
-export interface UpdateWorkOrderInput {
-  title?: string;
-  description?: string;
-  status?: WorkOrderStatus;
-  priority?: WorkOrderPriority;
-  category?: WorkOrderCategory;
-  locationId?: string | null;
-  assignedToId?: string | null;
-  estimatedHours?: number | null;
-  actualHours?: number | null;
-  estimatedCost?: number | null;
-  actualCost?: number | null;
-  dueDate?: Date | null;
-  notes?: string | null;
-}
-
-export interface SessionUser {
-  id: string;
-  name?: string | null;
-  email?: string | null;
-  role: UserRole;
-  image?: string | null;
+export interface ApiResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
 }
