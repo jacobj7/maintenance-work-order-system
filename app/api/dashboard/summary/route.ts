@@ -3,68 +3,143 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { query } from "@/lib/db";
 
-export const dynamic = "force-dynamic";
-
 export async function GET() {
+  const session = await getServerSession(authOptions);
+
+  if (!session || !session.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const role = (session.user as { role?: string }).role;
+  const userId = (session.user as { id?: string }).id;
+
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    let openCountResult;
+    let inProgressCountResult;
+    let completedCountResult;
+    let overdueCountResult;
+    let priorityBreakdownResult;
+    let recentActivityResult;
+
+    if (role === "technician") {
+      openCountResult = await query(
+        `SELECT COUNT(*) AS open_count
+         FROM work_orders
+         WHERE assigned_to = $1
+           AND status NOT IN ('completed', 'cancelled')`,
+        [userId],
+      );
+
+      inProgressCountResult = await query(
+        `SELECT COUNT(*) AS in_progress_count
+         FROM work_orders
+         WHERE assigned_to = $1
+           AND status = 'in_progress'`,
+        [userId],
+      );
+
+      completedCountResult = await query(
+        `SELECT COUNT(*) AS completed_count
+         FROM work_orders
+         WHERE assigned_to = $1
+           AND status = 'completed'`,
+        [userId],
+      );
+
+      overdueCountResult = await query(
+        `SELECT COUNT(*) AS overdue_count
+         FROM work_orders
+         WHERE assigned_to = $1
+           AND status NOT IN ('completed', 'cancelled')
+           AND due_date < NOW()`,
+        [userId],
+      );
+
+      priorityBreakdownResult = await query(
+        `SELECT priority, COUNT(*) AS count
+         FROM work_orders
+         WHERE assigned_to = $1
+           AND status NOT IN ('completed', 'cancelled')
+         GROUP BY priority
+         ORDER BY priority`,
+        [userId],
+      );
+
+      recentActivityResult = await query(
+        `SELECT id, title, status, priority, due_date, updated_at
+         FROM work_orders
+         WHERE assigned_to = $1
+         ORDER BY updated_at DESC
+         LIMIT 10`,
+        [userId],
+      );
+    } else {
+      openCountResult = await query(
+        `SELECT COUNT(*) AS open_count
+         FROM work_orders
+         WHERE status NOT IN ('completed', 'cancelled')`,
+        [],
+      );
+
+      inProgressCountResult = await query(
+        `SELECT COUNT(*) AS in_progress_count
+         FROM work_orders
+         WHERE status = 'in_progress'`,
+        [],
+      );
+
+      completedCountResult = await query(
+        `SELECT COUNT(*) AS completed_count
+         FROM work_orders
+         WHERE status = 'completed'`,
+        [],
+      );
+
+      overdueCountResult = await query(
+        `SELECT COUNT(*) AS overdue_count
+         FROM work_orders
+         WHERE status NOT IN ('completed', 'cancelled')
+           AND due_date < NOW()`,
+        [],
+      );
+
+      priorityBreakdownResult = await query(
+        `SELECT priority, COUNT(*) AS count
+         FROM work_orders
+         WHERE status NOT IN ('completed', 'cancelled')
+         GROUP BY priority
+         ORDER BY priority`,
+        [],
+      );
+
+      recentActivityResult = await query(
+        `SELECT id, title, status, priority, due_date, updated_at
+         FROM work_orders
+         ORDER BY updated_at DESC
+         LIMIT 10`,
+        [],
+      );
     }
 
-    const userId = (session.user as { id?: string }).id;
-
-    const openCountResult = await query(
-      `SELECT COUNT(*) AS open_count
-       FROM work_orders
-       WHERE user_id = $1
-         AND status NOT IN ('completed', 'cancelled')`,
-      [userId],
-    );
-
-    const overdueCountResult = await query(
-      `SELECT COUNT(*) AS overdue_count
-       FROM work_orders
-       WHERE user_id = $1
-         AND due_date < NOW()
-         AND status NOT IN ('completed', 'cancelled')`,
-      [userId],
-    );
-
-    const costsResult = await query(
-      `SELECT
-         COALESCE(SUM(estimated_cost), 0) AS total_estimated_cost,
-         COALESCE(SUM(actual_cost), 0) AS total_actual_cost
-       FROM work_orders
-       WHERE user_id = $1`,
-      [userId],
-    );
-
-    const completedThisMonthResult = await query(
-      `SELECT COUNT(*) AS completed_this_month
-       FROM work_orders
-       WHERE user_id = $1
-         AND status = 'completed'
-         AND DATE_TRUNC('month', updated_at) = DATE_TRUNC('month', NOW())`,
-      [userId],
-    );
-
     const summary = {
-      open_count: parseInt(openCountResult.rows[0]?.open_count ?? "0", 10),
-      overdue_count: parseInt(
+      openCount: parseInt(openCountResult.rows[0]?.open_count ?? "0", 10),
+      inProgressCount: parseInt(
+        inProgressCountResult.rows[0]?.in_progress_count ?? "0",
+        10,
+      ),
+      completedCount: parseInt(
+        completedCountResult.rows[0]?.completed_count ?? "0",
+        10,
+      ),
+      overdueCount: parseInt(
         overdueCountResult.rows[0]?.overdue_count ?? "0",
         10,
       ),
-      total_estimated_cost: parseFloat(
-        costsResult.rows[0]?.total_estimated_cost ?? "0",
-      ),
-      total_actual_cost: parseFloat(
-        costsResult.rows[0]?.total_actual_cost ?? "0",
-      ),
-      completed_this_month: parseInt(
-        completedThisMonthResult.rows[0]?.completed_this_month ?? "0",
-        10,
-      ),
+      priorityBreakdown: priorityBreakdownResult.rows.map((row) => ({
+        priority: row.priority,
+        count: parseInt(row.count, 10),
+      })),
+      recentActivity: recentActivityResult.rows,
     };
 
     return NextResponse.json(summary);
