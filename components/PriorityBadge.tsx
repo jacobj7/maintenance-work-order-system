@@ -1,6 +1,6 @@
 import React from "react";
 
-type Priority = "low" | "medium" | "high" | "urgent";
+type Priority = "low" | "medium" | "high" | "critical";
 
 interface PriorityBadgeProps {
   priority: Priority;
@@ -13,28 +13,35 @@ const priorityConfig: Record<
 > = {
   low: {
     label: "Low",
-    bgColor: "bg-gray-100",
-    textColor: "text-gray-700",
-    borderColor: "border-gray-300",
+    bgColor: "bg-green-50",
+    textColor: "text-green-700",
+    borderColor: "border-green-200",
   },
   medium: {
     label: "Medium",
-    bgColor: "bg-blue-100",
-    textColor: "text-blue-700",
-    borderColor: "border-blue-300",
+    bgColor: "bg-yellow-50",
+    textColor: "text-yellow-700",
+    borderColor: "border-yellow-200",
   },
   high: {
     label: "High",
-    bgColor: "bg-orange-100",
+    bgColor: "bg-orange-50",
     textColor: "text-orange-700",
-    borderColor: "border-orange-300",
+    borderColor: "border-orange-200",
   },
-  urgent: {
-    label: "Urgent",
-    bgColor: "bg-red-100",
+  critical: {
+    label: "Critical",
+    bgColor: "bg-red-50",
     textColor: "text-red-700",
-    borderColor: "border-red-300",
+    borderColor: "border-red-200",
   },
+};
+
+const dotColorMap: Record<Priority, string> = {
+  low: "bg-green-500",
+  medium: "bg-yellow-500",
+  high: "bg-orange-500",
+  critical: "bg-red-500",
 };
 
 export function PriorityBadge({
@@ -42,15 +49,16 @@ export function PriorityBadge({
   className = "",
 }: PriorityBadgeProps) {
   const config = priorityConfig[priority];
-
-  if (!config) {
-    return null;
-  }
+  const dotColor = dotColorMap[priority];
 
   return (
     <span
-      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${config.bgColor} ${config.textColor} ${config.borderColor} ${className}`}
+      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${config.bgColor} ${config.textColor} ${config.borderColor} ${className}`}
     >
+      <span
+        className={`inline-block w-1.5 h-1.5 rounded-full ${dotColor}`}
+        aria-hidden="true"
+      />
       {config.label}
     </span>
   );

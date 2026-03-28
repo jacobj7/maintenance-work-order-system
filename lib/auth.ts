@@ -1,11 +1,7 @@
 import NextAuth, { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
-import { Pool } from "pg";
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+import { query } from "@/lib/db";
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -20,18 +16,17 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
-        const client = await pool.connect();
         try {
-          const result = await client.query(
-            "SELECT id, email, password_hash, role, name FROM users WHERE email = $1 LIMIT 1",
+          const result = await query(
+            "SELECT id, email, password_hash, role FROM users WHERE email = $1 LIMIT 1",
             [credentials.email],
           );
 
-          const user = result.rows[0];
-
-          if (!user) {
+          if (result.rows.length === 0) {
             return null;
           }
+
+          const user = result.rows[0];
 
           const isValid = await bcrypt.compare(
             credentials.password,
@@ -45,11 +40,11 @@ export const authOptions: NextAuthOptions = {
           return {
             id: String(user.id),
             email: user.email,
-            name: user.name,
             role: user.role,
           };
-        } finally {
-          client.release();
+        } catch (error) {
+          console.error("Auth error:", error);
+          return null;
         }
       },
     }),
@@ -66,7 +61,7 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
     async session({ session, token }) {
-      if (session.user) {
+      if (token && session.user) {
         (session.user as any).id = token.id as string;
         (session.user as any).role = token.role as string;
       }

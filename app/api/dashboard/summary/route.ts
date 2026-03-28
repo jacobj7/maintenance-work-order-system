@@ -1,81 +1,153 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { pool } from "@/lib/db";
-
-export const dynamic = "force-dynamic";
+import { query } from "@/lib/db";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
-  if (!session) {
+
+  if (!session || !session.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const client = await pool.connect();
+  const role = (session.user as { role?: string }).role;
+  const userId = (session.user as { id?: string }).id;
+
   try {
-    const statusCountsResult = await client.query(`
-      SELECT
-        COUNT(*) FILTER (WHERE status = 'open') AS open_count,
-        COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress_count,
-        COUNT(*) FILTER (WHERE status = 'completed') AS completed_count
-      FROM work_orders
-    `);
+    let openCountResult;
+    let inProgressCountResult;
+    let completedCountResult;
+    let overdueCountResult;
+    let priorityBreakdownResult;
+    let recentActivityResult;
 
-    const priorityCountsResult = await client.query(`
-      SELECT
-        COUNT(*) FILTER (WHERE priority = 'low') AS low_count,
-        COUNT(*) FILTER (WHERE priority = 'medium') AS medium_count,
-        COUNT(*) FILTER (WHERE priority = 'high') AS high_count,
-        COUNT(*) FILTER (WHERE priority = 'urgent') AS urgent_count
-      FROM work_orders
-      WHERE status != 'completed'
-    `);
+    if (role === "technician") {
+      openCountResult = await query(
+        `SELECT COUNT(*) AS open_count
+         FROM work_orders
+         WHERE assigned_to = $1
+           AND status NOT IN ('completed', 'cancelled')`,
+        [userId],
+      );
 
-    const technicianCountsResult = await client.query(`
-      SELECT
-        u.id AS technician_id,
-        u.name AS technician_name,
-        u.email AS technician_email,
-        COUNT(wo.id) AS open_work_order_count
-      FROM users u
-      LEFT JOIN work_orders wo
-        ON wo.assigned_technician_id = u.id
-        AND wo.status IN ('open', 'in_progress')
-      WHERE u.role = 'technician'
-      GROUP BY u.id, u.name, u.email
-      ORDER BY open_work_order_count DESC, u.name ASC
-    `);
+      inProgressCountResult = await query(
+        `SELECT COUNT(*) AS in_progress_count
+         FROM work_orders
+         WHERE assigned_to = $1
+           AND status = 'in_progress'`,
+        [userId],
+      );
 
-    const statusCounts = statusCountsResult.rows[0];
-    const priorityCounts = priorityCountsResult.rows[0];
-    const technicianCounts = technicianCountsResult.rows;
+      completedCountResult = await query(
+        `SELECT COUNT(*) AS completed_count
+         FROM work_orders
+         WHERE assigned_to = $1
+           AND status = 'completed'`,
+        [userId],
+      );
 
-    return NextResponse.json({
-      status: {
-        open: parseInt(statusCounts.open_count, 10),
-        in_progress: parseInt(statusCounts.in_progress_count, 10),
-        completed: parseInt(statusCounts.completed_count, 10),
-      },
-      priority: {
-        low: parseInt(priorityCounts.low_count, 10),
-        medium: parseInt(priorityCounts.medium_count, 10),
-        high: parseInt(priorityCounts.high_count, 10),
-        urgent: parseInt(priorityCounts.urgent_count, 10),
-      },
-      technicians: technicianCounts.map((row) => ({
-        id: row.technician_id,
-        name: row.technician_name,
-        email: row.technician_email,
-        openWorkOrderCount: parseInt(row.open_work_order_count, 10),
+      overdueCountResult = await query(
+        `SELECT COUNT(*) AS overdue_count
+         FROM work_orders
+         WHERE assigned_to = $1
+           AND status NOT IN ('completed', 'cancelled')
+           AND due_date < NOW()`,
+        [userId],
+      );
+
+      priorityBreakdownResult = await query(
+        `SELECT priority, COUNT(*) AS count
+         FROM work_orders
+         WHERE assigned_to = $1
+           AND status NOT IN ('completed', 'cancelled')
+         GROUP BY priority
+         ORDER BY priority`,
+        [userId],
+      );
+
+      recentActivityResult = await query(
+        `SELECT id, title, status, priority, due_date, updated_at
+         FROM work_orders
+         WHERE assigned_to = $1
+         ORDER BY updated_at DESC
+         LIMIT 10`,
+        [userId],
+      );
+    } else {
+      openCountResult = await query(
+        `SELECT COUNT(*) AS open_count
+         FROM work_orders
+         WHERE status NOT IN ('completed', 'cancelled')`,
+        [],
+      );
+
+      inProgressCountResult = await query(
+        `SELECT COUNT(*) AS in_progress_count
+         FROM work_orders
+         WHERE status = 'in_progress'`,
+        [],
+      );
+
+      completedCountResult = await query(
+        `SELECT COUNT(*) AS completed_count
+         FROM work_orders
+         WHERE status = 'completed'`,
+        [],
+      );
+
+      overdueCountResult = await query(
+        `SELECT COUNT(*) AS overdue_count
+         FROM work_orders
+         WHERE status NOT IN ('completed', 'cancelled')
+           AND due_date < NOW()`,
+        [],
+      );
+
+      priorityBreakdownResult = await query(
+        `SELECT priority, COUNT(*) AS count
+         FROM work_orders
+         WHERE status NOT IN ('completed', 'cancelled')
+         GROUP BY priority
+         ORDER BY priority`,
+        [],
+      );
+
+      recentActivityResult = await query(
+        `SELECT id, title, status, priority, due_date, updated_at
+         FROM work_orders
+         ORDER BY updated_at DESC
+         LIMIT 10`,
+        [],
+      );
+    }
+
+    const summary = {
+      openCount: parseInt(openCountResult.rows[0]?.open_count ?? "0", 10),
+      inProgressCount: parseInt(
+        inProgressCountResult.rows[0]?.in_progress_count ?? "0",
+        10,
+      ),
+      completedCount: parseInt(
+        completedCountResult.rows[0]?.completed_count ?? "0",
+        10,
+      ),
+      overdueCount: parseInt(
+        overdueCountResult.rows[0]?.overdue_count ?? "0",
+        10,
+      ),
+      priorityBreakdown: priorityBreakdownResult.rows.map((row) => ({
+        priority: row.priority,
+        count: parseInt(row.count, 10),
       })),
-    });
+      recentActivity: recentActivityResult.rows,
+    };
+
+    return NextResponse.json(summary);
   } catch (error) {
-    console.error("Error fetching dashboard summary:", error);
+    console.error("Dashboard summary error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
     );
-  } finally {
-    client.release();
   }
 }

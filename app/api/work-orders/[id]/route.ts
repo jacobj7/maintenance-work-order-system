@@ -1,95 +1,70 @@
-import { NextRequest, NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { query } from "@/lib/db";
 import { z } from "zod";
-import { Pool } from "pg";
 
-export const dynamic = "force-dynamic";
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
-
-const VALID_TRANSITIONS: Record<string, string[]> = {
-  pending: ["assigned", "cancelled"],
-  assigned: ["in_progress", "cancelled"],
-  in_progress: ["on_hold", "completed", "cancelled"],
-  on_hold: ["in_progress", "cancelled"],
-  completed: [],
-  cancelled: [],
-};
-
-const PatchSchema = z.object({
-  status: z.string().optional(),
-  technician_id: z.number().int().positive().optional(),
-  notes: z.string().optional(),
+const patchSchema = z.object({
+  title: z.string().min(1).max(255).optional(),
+  description: z.string().optional(),
+  status: z.enum(["open", "in_progress", "completed", "cancelled"]).optional(),
+  priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
+  assigned_to: z.number().int().positive().nullable().optional(),
+  due_date: z.string().nullable().optional(),
 });
 
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } },
 ) {
-  const session = await getServerSession();
+  const session = await getServerSession(authOptions);
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const id = parseInt(params.id, 10);
   if (isNaN(id)) {
-    return NextResponse.json(
-      { error: "Invalid work order ID" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Invalid ID" }, { status: 400 });
   }
 
-  const client = await pool.connect();
   try {
-    const workOrderResult = await client.query(
-      `SELECT 
-        wo.*,
-        u.name AS technician_name,
-        u.email AS technician_email,
-        creator.name AS created_by_name,
-        creator.email AS created_by_email
-       FROM work_orders wo
-       LEFT JOIN users u ON wo.technician_id = u.id
-       LEFT JOIN users creator ON wo.created_by = creator.id
-       WHERE wo.id = $1`,
+    const result = await query(
+      `SELECT
+        wo.id,
+        wo.title,
+        wo.description,
+        wo.status,
+        wo.priority,
+        wo.created_at,
+        wo.updated_at,
+        wo.due_date,
+        wo.user_id,
+        wo.assigned_to,
+        u.name AS created_by_name,
+        u.email AS created_by_email,
+        t.name AS assigned_to_name,
+        t.email AS assigned_to_email
+      FROM work_orders wo
+      LEFT JOIN users u ON wo.user_id = u.id
+      LEFT JOIN users t ON wo.assigned_to = t.id
+      WHERE wo.id = $1`,
       [id],
     );
 
-    if (workOrderResult.rows.length === 0) {
+    if (result.rows.length === 0) {
       return NextResponse.json(
         { error: "Work order not found" },
         { status: 404 },
       );
     }
 
-    const historyResult = await client.query(
-      `SELECT 
-        sh.*,
-        u.name AS changed_by_name,
-        u.email AS changed_by_email
-       FROM status_history sh
-       LEFT JOIN users u ON sh.changed_by = u.id
-       WHERE sh.work_order_id = $1
-       ORDER BY sh.created_at ASC`,
-      [id],
-    );
-
-    const workOrder = {
-      ...workOrderResult.rows[0],
-      status_history: historyResult.rows,
-    };
-
-    return NextResponse.json({ data: workOrder });
+    return NextResponse.json(result.rows[0]);
   } catch (error) {
-    console.error("GET /api/work-orders/[id] error:", error);
+    console.error("Error fetching work order:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
     );
-  } finally {
-    client.release();
   }
 }
 
@@ -97,16 +72,65 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: { id: string } },
 ) {
-  const session = await getServerSession();
+  const session = await getServerSession(authOptions);
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const id = parseInt(params.id, 10);
   if (isNaN(id)) {
+    return NextResponse.json({ error: "Invalid ID" }, { status: 400 });
+  }
+
+  // Fetch the work order to check ownership and existence
+  let workOrder: {
+    id: number;
+    assigned_to: number | null;
+    user_id: number;
+  } | null = null;
+
+  try {
+    const woResult = await query(
+      `SELECT id, assigned_to, user_id FROM work_orders WHERE id = $1`,
+      [id],
+    );
+
+    if (woResult.rows.length === 0) {
+      return NextResponse.json(
+        { error: "Work order not found" },
+        { status: 404 },
+      );
+    }
+
+    workOrder = woResult.rows[0] as {
+      id: number;
+      assigned_to: number | null;
+      user_id: number;
+    };
+  } catch (error) {
+    console.error("Error fetching work order for authorization:", error);
     return NextResponse.json(
-      { error: "Invalid work order ID" },
-      { status: 400 },
+      { error: "Internal server error" },
+      { status: 500 },
+    );
+  }
+
+  // Authorization: allow admins, managers, and the assigned technician only
+  const userRole = (session.user as { role?: string })?.role;
+  const userId = parseInt((session.user as { id?: string })?.id ?? "0", 10);
+
+  const isAdmin = userRole === "admin";
+  const isManager = userRole === "manager";
+  const isAssignedTechnician =
+    workOrder.assigned_to !== null && workOrder.assigned_to === userId;
+
+  if (!isAdmin && !isManager && !isAssignedTechnician) {
+    return NextResponse.json(
+      {
+        error:
+          "Forbidden: only the assigned technician, managers, or admins may update this work order",
+      },
+      { status: 403 },
     );
   }
 
@@ -117,133 +141,136 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const parseResult = PatchSchema.safeParse(body);
-  if (!parseResult.success) {
+  const parsed = patchSchema.safeParse(body);
+  if (!parsed.success) {
     return NextResponse.json(
-      { error: "Validation failed", details: parseResult.error.flatten() },
+      { error: "Validation error", details: parsed.error.flatten() },
       { status: 422 },
     );
   }
 
-  const { status, technician_id, notes } = parseResult.data;
+  const data = parsed.data;
 
-  if (!status && technician_id === undefined) {
+  if (Object.keys(data).length === 0) {
     return NextResponse.json(
-      { error: "At least one of status or technician_id must be provided" },
+      { error: "No fields provided for update" },
       { status: 400 },
     );
   }
 
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  // Technicians may only update status — not reassign, reprioritize, etc.
+  if (!isAdmin && !isManager && isAssignedTechnician) {
+    const allowedKeys = new Set(["status"]);
+    const disallowedKeys = Object.keys(data).filter((k) => !allowedKeys.has(k));
+    if (disallowedKeys.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Forbidden: technicians may only update status. Disallowed fields: ${disallowedKeys.join(", ")}`,
+        },
+        { status: 403 },
+      );
+    }
+  }
 
-    const existingResult = await client.query(
-      "SELECT * FROM work_orders WHERE id = $1 FOR UPDATE",
-      [id],
+  const setClauses: string[] = [];
+  const values: unknown[] = [];
+  let paramIndex = 1;
+
+  if (data.title !== undefined) {
+    setClauses.push(`title = $${paramIndex++}`);
+    values.push(data.title);
+  }
+  if (data.description !== undefined) {
+    setClauses.push(`description = $${paramIndex++}`);
+    values.push(data.description);
+  }
+  if (data.status !== undefined) {
+    setClauses.push(`status = $${paramIndex++}`);
+    values.push(data.status);
+  }
+  if (data.priority !== undefined) {
+    setClauses.push(`priority = $${paramIndex++}`);
+    values.push(data.priority);
+  }
+  if (data.assigned_to !== undefined) {
+    setClauses.push(`assigned_to = $${paramIndex++}`);
+    values.push(data.assigned_to);
+  }
+  if (data.due_date !== undefined) {
+    setClauses.push(`due_date = $${paramIndex++}`);
+    values.push(data.due_date);
+  }
+
+  setClauses.push(`updated_at = NOW()`);
+  values.push(id);
+
+  try {
+    const result = await query(
+      `UPDATE work_orders
+       SET ${setClauses.join(", ")}
+       WHERE id = $${paramIndex}
+       RETURNING *`,
+      values,
     );
 
-    if (existingResult.rows.length === 0) {
-      await client.query("ROLLBACK");
+    if (result.rows.length === 0) {
       return NextResponse.json(
         { error: "Work order not found" },
         { status: 404 },
       );
     }
 
-    const existing = existingResult.rows[0];
-    const currentStatus: string = existing.status;
-
-    if (status && status !== currentStatus) {
-      const allowedTransitions = VALID_TRANSITIONS[currentStatus];
-      if (!allowedTransitions) {
-        await client.query("ROLLBACK");
-        return NextResponse.json(
-          { error: `Unknown current status: ${currentStatus}` },
-          { status: 400 },
-        );
-      }
-      if (!allowedTransitions.includes(status)) {
-        await client.query("ROLLBACK");
-        return NextResponse.json(
-          {
-            error: `Invalid status transition from '${currentStatus}' to '${status}'`,
-            allowed_transitions: allowedTransitions,
-          },
-          { status: 422 },
-        );
-      }
-    }
-
-    if (technician_id !== undefined) {
-      const techResult = await client.query(
-        "SELECT id FROM users WHERE id = $1",
-        [technician_id],
-      );
-      if (techResult.rows.length === 0) {
-        await client.query("ROLLBACK");
-        return NextResponse.json(
-          { error: "Technician not found" },
-          { status: 404 },
-        );
-      }
-    }
-
-    const setClauses: string[] = [];
-    const values: unknown[] = [];
-    let paramIndex = 1;
-
-    if (status && status !== currentStatus) {
-      setClauses.push(`status = $${paramIndex++}`);
-      values.push(status);
-    }
-
-    if (technician_id !== undefined) {
-      setClauses.push(`technician_id = $${paramIndex++}`);
-      values.push(technician_id);
-    }
-
-    setClauses.push(`updated_at = NOW()`);
-
-    values.push(id);
-    const updateQuery = `
-      UPDATE work_orders
-      SET ${setClauses.join(", ")}
-      WHERE id = $${paramIndex}
-      RETURNING *
-    `;
-
-    const updateResult = await client.query(updateQuery, values);
-    const updatedWorkOrder = updateResult.rows[0];
-
-    let newHistoryRecord = null;
-    if (status && status !== currentStatus) {
-      const changedById =
-        (session.user as { id?: number | string } | undefined)?.id ?? null;
-
-      const historyResult = await client.query(
-        `INSERT INTO status_history (work_order_id, previous_status, new_status, changed_by, notes, created_at)
-         VALUES ($1, $2, $3, $4, $5, NOW())
-         RETURNING *`,
-        [id, currentStatus, status, changedById, notes ?? null],
-      );
-      newHistoryRecord = historyResult.rows[0];
-    }
-
-    await client.query("COMMIT");
-
-    return NextResponse.json({
-      data: updatedWorkOrder,
-      status_history_record: newHistoryRecord,
-    });
+    return NextResponse.json(result.rows[0]);
   } catch (error) {
-    await client.query("ROLLBACK");
-    console.error("PATCH /api/work-orders/[id] error:", error);
+    console.error("Error updating work order:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
     );
-  } finally {
-    client.release();
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { id: string } },
+) {
+  const session = await getServerSession(authOptions);
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const userRole = (session.user as { role?: string })?.role;
+  if (userRole !== "admin" && userRole !== "manager") {
+    return NextResponse.json(
+      { error: "Forbidden: insufficient permissions" },
+      { status: 403 },
+    );
+  }
+
+  const id = parseInt(params.id, 10);
+  if (isNaN(id)) {
+    return NextResponse.json({ error: "Invalid ID" }, { status: 400 });
+  }
+
+  try {
+    const result = await query(
+      `DELETE FROM work_orders WHERE id = $1 RETURNING id`,
+      [id],
+    );
+
+    if (result.rows.length === 0) {
+      return NextResponse.json(
+        { error: "Work order not found" },
+        { status: 404 },
+      );
+    }
+
+    return NextResponse.json({ message: "Work order deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting work order:", error);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 },
+    );
   }
 }

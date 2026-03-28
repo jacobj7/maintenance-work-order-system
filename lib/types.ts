@@ -1,5 +1,3 @@
-export type UserRole = "admin" | "manager" | "technician" | "viewer";
-
 export type WorkOrderStatus =
   | "open"
   | "in_progress"
@@ -9,14 +7,11 @@ export type WorkOrderStatus =
 
 export type WorkOrderPriority = "low" | "medium" | "high" | "critical";
 
-export type AssetStatus = "active" | "inactive" | "maintenance" | "retired";
-
 export interface User {
   id: string;
+  name: string | null;
   email: string;
-  name: string;
-  role: UserRole;
-  avatarUrl?: string | null;
+  role: "admin" | "technician" | "requester" | "viewer";
   createdAt: Date;
   updatedAt: Date;
 }
@@ -24,10 +19,10 @@ export interface User {
 export interface Location {
   id: string;
   name: string;
-  description?: string | null;
-  address?: string | null;
-  parentLocationId?: string | null;
-  parentLocation?: Location | null;
+  description: string | null;
+  address: string | null;
+  parentLocationId: string | null;
+  parentLocation?: Location;
   children?: Location[];
   createdAt: Date;
   updatedAt: Date;
@@ -36,19 +31,20 @@ export interface Location {
 export interface Asset {
   id: string;
   name: string;
-  description?: string | null;
-  serialNumber?: string | null;
-  model?: string | null;
-  manufacturer?: string | null;
-  purchaseDate?: Date | null;
-  warrantyExpiry?: Date | null;
-  status: AssetStatus;
-  locationId?: string | null;
-  location?: Location | null;
-  parentAssetId?: string | null;
-  parentAsset?: Asset | null;
+  description: string | null;
+  assetTag: string | null;
+  serialNumber: string | null;
+  model: string | null;
+  manufacturer: string | null;
+  purchaseDate: Date | null;
+  purchaseCost: number | null;
+  warrantyExpiry: Date | null;
+  status: "active" | "inactive" | "under_maintenance" | "retired";
+  locationId: string | null;
+  location?: Location;
+  parentAssetId: string | null;
+  parentAsset?: Asset;
   children?: Asset[];
-  metadata?: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -56,104 +52,94 @@ export interface Asset {
 export interface WorkOrder {
   id: string;
   title: string;
-  description?: string | null;
+  description: string | null;
   status: WorkOrderStatus;
   priority: WorkOrderPriority;
-  assetId?: string | null;
-  asset?: Asset | null;
-  locationId?: string | null;
-  location?: Location | null;
-  createdById: string;
-  createdBy?: User | null;
-  dueDate?: Date | null;
-  completedAt?: Date | null;
-  estimatedHours?: number | null;
-  actualHours?: number | null;
-  assignments?: Assignment[];
-  statusEvents?: StatusEvent[];
-  partsLogs?: PartsLog[];
-  laborLogs?: LaborLog[];
+  type: "corrective" | "preventive" | "inspection" | "emergency";
+  assetId: string | null;
+  asset?: Asset;
+  locationId: string | null;
+  location?: Location;
+  assignedToId: string | null;
+  assignedTo?: User;
+  requestedById: string;
+  requestedBy?: User;
+  scheduledStart: Date | null;
+  scheduledEnd: Date | null;
+  actualStart: Date | null;
+  actualEnd: Date | null;
+  estimatedHours: number | null;
+  actualHours: number | null;
+  notes: string | null;
+  completionNotes: string | null;
+  statusHistory?: StatusHistory[];
+  parts?: WorkOrderPart[];
+  laborEntries?: LaborEntry[];
   createdAt: Date;
   updatedAt: Date;
 }
 
-export interface Assignment {
+export interface StatusHistory {
   id: string;
   workOrderId: string;
-  workOrder?: WorkOrder | null;
-  userId: string;
-  user?: User | null;
-  assignedById: string;
-  assignedBy?: User | null;
-  assignedAt: Date;
-  notes?: string | null;
-}
-
-export interface StatusEvent {
-  id: string;
-  workOrderId: string;
-  workOrder?: WorkOrder | null;
-  fromStatus?: WorkOrderStatus | null;
+  workOrder?: WorkOrder;
+  fromStatus: WorkOrderStatus | null;
   toStatus: WorkOrderStatus;
   changedById: string;
-  changedBy?: User | null;
-  reason?: string | null;
+  changedBy?: User;
+  reason: string | null;
   createdAt: Date;
 }
 
-export interface PartsLog {
+export interface WorkOrderPart {
   id: string;
   workOrderId: string;
-  workOrder?: WorkOrder | null;
+  workOrder?: WorkOrder;
   partName: string;
-  partNumber?: string | null;
+  partNumber: string | null;
   quantity: number;
-  unitCost?: number | null;
-  totalCost?: number | null;
-  supplier?: string | null;
-  notes?: string | null;
-  loggedById: string;
-  loggedBy?: User | null;
+  unitCost: number | null;
+  totalCost: number | null;
+  notes: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
-export interface LaborLog {
+export interface LaborEntry {
   id: string;
   workOrderId: string;
-  workOrder?: WorkOrder | null;
-  userId: string;
-  user?: User | null;
+  workOrder?: WorkOrder;
+  technicianId: string;
+  technician?: User;
   hoursWorked: number;
-  hourlyRate?: number | null;
-  totalCost?: number | null;
+  hourlyRate: number | null;
+  totalCost: number | null;
   workDate: Date;
-  description?: string | null;
+  description: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
-export interface PaginationParams {
-  page: number;
-  pageSize: number;
-}
-
-export interface PaginatedResult<T> {
-  data: T[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-}
-
-export interface ApiError {
-  message: string;
-  code?: string;
-  details?: unknown;
-}
-
-export interface ApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: ApiError;
+export interface MaintenanceSchedule {
+  id: string;
+  name: string;
+  description: string | null;
+  assetId: string | null;
+  asset?: Asset;
+  locationId: string | null;
+  location?: Location;
+  frequency: "daily" | "weekly" | "monthly" | "quarterly" | "yearly" | "custom";
+  frequencyValue: number | null;
+  frequencyUnit: "days" | "weeks" | "months" | "years" | null;
+  type: "corrective" | "preventive" | "inspection" | "emergency";
+  priority: WorkOrderPriority;
+  estimatedHours: number | null;
+  assignedToId: string | null;
+  assignedTo?: User;
+  lastRunAt: Date | null;
+  nextRunAt: Date | null;
+  isActive: boolean;
+  templateNotes: string | null;
+  createdAt: Date;
+  updatedAt: Date;
 }

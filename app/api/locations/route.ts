@@ -1,82 +1,66 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { query } from "@/lib/db";
 import { z } from "zod";
-import { Pool } from "pg";
 
-export const dynamic = "force-dynamic";
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
-
-const CreateLocationSchema = z.object({
-  name: z.string().min(1, "Name is required"),
-  address: z.string().optional(),
-  city: z.string().optional(),
-  state: z.string().optional(),
-  country: z.string().optional(),
-  postal_code: z.string().optional(),
-  latitude: z.number().optional(),
-  longitude: z.number().optional(),
-  description: z.string().optional(),
+const locationSchema = z.object({
+  name: z.string().min(1).max(255),
+  address: z.string().max(500).optional(),
+  city: z.string().max(100).optional(),
+  state: z.string().max(100).optional(),
+  zip: z.string().max(20).optional(),
+  country: z.string().max(100).optional(),
 });
 
 export async function GET(request: NextRequest) {
-  const client = await pool.connect();
+  const session = await getServerSession(authOptions);
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
-    const result = await client.query(
-      "SELECT * FROM locations ORDER BY created_at DESC",
-    );
-    return NextResponse.json({ locations: result.rows }, { status: 200 });
+    const result = await query("SELECT * FROM locations ORDER BY name ASC", []);
+    return NextResponse.json({ locations: result.rows });
   } catch (error) {
     console.error("Error fetching locations:", error);
     return NextResponse.json(
       { error: "Failed to fetch locations" },
       { status: 500 },
     );
-  } finally {
-    client.release();
   }
 }
 
 export async function POST(request: NextRequest) {
-  const client = await pool.connect();
+  const session = await getServerSession(authOptions);
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
-    const parsed = CreateLocationSchema.safeParse(body);
+    const parseResult = locationSchema.safeParse(body);
 
-    if (!parsed.success) {
+    if (!parseResult.success) {
       return NextResponse.json(
-        { error: "Validation failed", details: parsed.error.flatten() },
+        { error: "Invalid input", details: parseResult.error.errors },
         { status: 400 },
       );
     }
 
-    const {
-      name,
-      address,
-      city,
-      state,
-      country,
-      postal_code,
-      latitude,
-      longitude,
-      description,
-    } = parsed.data;
+    const { name, address, city, state, zip, country } = parseResult.data;
 
-    const result = await client.query(
-      `INSERT INTO locations (name, address, city, state, country, postal_code, latitude, longitude, description, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+    const result = await query(
+      `INSERT INTO locations (name, address, city, state, zip, country, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
        RETURNING *`,
       [
         name,
         address ?? null,
         city ?? null,
         state ?? null,
+        zip ?? null,
         country ?? null,
-        postal_code ?? null,
-        latitude ?? null,
-        longitude ?? null,
-        description ?? null,
       ],
     );
 
@@ -87,7 +71,5 @@ export async function POST(request: NextRequest) {
       { error: "Failed to create location" },
       { status: 500 },
     );
-  } finally {
-    client.release();
   }
 }
