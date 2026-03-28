@@ -1,73 +1,79 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { query } from "@/lib/db";
 import { redirect } from "next/navigation";
-import { Pool } from "pg";
-import NewWorkOrderClient from "./NewWorkOrderClient";
+import WorkOrderForm from "@/components/WorkOrderForm";
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+interface Asset {
+  id: string;
+  name: string;
+  asset_tag: string;
+  location_id: string;
+}
+
+interface Location {
+  id: string;
+  name: string;
+  building: string;
+  floor: string;
+}
+
+interface Technician {
+  id: string;
+  name: string;
+  email: string;
+}
 
 export default async function NewWorkOrderPage() {
   const session = await getServerSession(authOptions);
 
-  if (!session) {
+  if (!session?.user) {
     redirect("/login");
   }
 
-  let assets: { id: string; name: string; location: string }[] = [];
-  let technicians: { id: string; name: string; email: string }[] = [];
-
-  try {
-    const client = await pool.connect();
-
-    try {
-      const assetsResult = await client.query<{
-        id: string;
-        name: string;
-        location: string;
-      }>(
-        `SELECT id::text, name, COALESCE(location, '') as location
-         FROM assets
-         ORDER BY name ASC`,
-      );
-
-      assets = assetsResult.rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        location: row.location,
-      }));
-
-      const techniciansResult = await client.query<{
-        id: string;
-        name: string;
-        email: string;
-      }>(
-        `SELECT id::text, name, email
-         FROM users
-         WHERE role = 'technician' OR role = 'admin'
-         ORDER BY name ASC`,
-      );
-
-      technicians = techniciansResult.rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        email: row.email,
-      }));
-    } finally {
-      client.release();
-    }
-  } catch (error) {
-    console.error("Error fetching data for new work order:", error);
+  const role = (session.user as any).role;
+  if (role !== "admin" && role !== "manager" && role !== "technician") {
+    redirect("/dashboard");
   }
 
-  const serializedAssets = JSON.parse(JSON.stringify(assets));
-  const serializedTechnicians = JSON.parse(JSON.stringify(technicians));
+  const assetsResult = await query<Asset>(
+    `SELECT a.id, a.name, a.asset_tag, a.location_id
+     FROM assets a
+     ORDER BY a.name ASC`,
+  );
+  const assets: Asset[] = assetsResult ?? [];
+
+  const locationsResult = await query<Location>(
+    `SELECT l.id, l.name, l.building, l.floor
+     FROM locations l
+     ORDER BY l.building ASC, l.floor ASC, l.name ASC`,
+  );
+  const locations: Location[] = locationsResult ?? [];
+
+  const techniciansResult = await query<Technician>(
+    `SELECT u.id, u.name, u.email
+     FROM users u
+     WHERE u.role = 'technician'
+     ORDER BY u.name ASC`,
+  );
+  const technicians: Technician[] = techniciansResult ?? [];
 
   return (
-    <NewWorkOrderClient
-      assets={serializedAssets}
-      technicians={serializedTechnicians}
-    />
+    <div className="max-w-4xl mx-auto py-8 px-4">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900">
+          Create New Work Order
+        </h1>
+        <p className="mt-1 text-sm text-gray-500">
+          Fill out the form below to create a new work order.
+        </p>
+      </div>
+      <WorkOrderForm
+        assets={assets}
+        locations={locations}
+        technicians={technicians}
+        currentUserRole={role}
+      />
+    </div>
   );
 }

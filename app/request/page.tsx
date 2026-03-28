@@ -1,33 +1,55 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { z } from "zod";
 
-const schema = z.object({
-  name: z.string().min(1, "Name is required"),
-  email: z.string().email("Valid email is required"),
-  title: z.string().min(1, "Title is required"),
-  description: z.string().min(10, "Description must be at least 10 characters"),
-  priority: z.enum(["low", "medium", "high", "urgent"], {
-    errorMap: () => ({ message: "Please select a valid priority" }),
-  }),
+const requestSchema = z.object({
+  title: z.string().min(1, "Title is required").max(200),
+  description: z.string().min(1, "Description is required"),
+  location: z.string().min(1, "Location is required"),
+  priority: z.enum(["low", "medium", "high", "urgent"]),
+  requesterName: z.string().min(1, "Your name is required"),
+  requesterEmail: z.string().email("Valid email is required"),
+  requesterPhone: z.string().optional(),
 });
 
-type FormData = z.infer<typeof schema>;
-type FormErrors = Partial<Record<keyof FormData, string>>;
+type RequestForm = z.infer<typeof requestSchema>;
 
 export default function RequestPage() {
-  const [formData, setFormData] = useState<FormData>({
-    name: "",
-    email: "",
+  const router = useRouter();
+  const [formData, setFormData] = useState<RequestForm>({
     title: "",
     description: "",
+    location: "",
     priority: "medium",
+    requesterName: "",
+    requesterEmail: "",
+    requesterPhone: "",
   });
-  const [errors, setErrors] = useState<FormErrors>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errors, setErrors] = useState<
+    Partial<Record<keyof RequestForm, string>>
+  >({});
+  const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [serverError, setServerError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const validate = (): boolean => {
+    const result = requestSchema.safeParse(formData);
+    if (!result.success) {
+      const fieldErrors: Partial<Record<keyof RequestForm, string>> = {};
+      result.error.errors.forEach((err) => {
+        const field = err.path[0] as keyof RequestForm;
+        if (!fieldErrors[field]) {
+          fieldErrors[field] = err.message;
+        }
+      });
+      setErrors(fieldErrors);
+      return false;
+    }
+    setErrors({});
+    return true;
+  };
 
   const handleChange = (
     e: React.ChangeEvent<
@@ -36,55 +58,48 @@ export default function RequestPage() {
   ) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
-    if (errors[name as keyof FormData]) {
+    if (errors[name as keyof RequestForm]) {
       setErrors((prev) => ({ ...prev, [name]: undefined }));
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setServerError(null);
+    if (!validate()) return;
 
-    const result = schema.safeParse(formData);
-    if (!result.success) {
-      const fieldErrors: FormErrors = {};
-      result.error.errors.forEach((err) => {
-        const field = err.path[0] as keyof FormData;
-        fieldErrors[field] = err.message;
-      });
-      setErrors(fieldErrors);
-      return;
-    }
+    setSubmitting(true);
+    setSubmitError(null);
 
-    setIsSubmitting(true);
     try {
-      const response = await fetch("/api/work-orders", {
+      const response = await fetch("/api/work-orders/public", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(result.data),
+        body: JSON.stringify(formData),
       });
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(
-          data.message || "Failed to submit request. Please try again.",
+          data.error || `Request failed with status ${response.status}`,
         );
       }
 
       setSubmitted(true);
     } catch (err) {
-      setServerError(
-        err instanceof Error ? err.message : "An unexpected error occurred.",
+      setSubmitError(
+        err instanceof Error
+          ? err.message
+          : "Failed to submit request. Please try again.",
       );
     } finally {
-      setIsSubmitting(false);
+      setSubmitting(false);
     }
   };
 
   if (submitted) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
-        <div className="max-w-md w-full bg-white rounded-2xl shadow-lg p-8 text-center">
+        <div className="max-w-md w-full bg-white rounded-lg shadow-md p-8 text-center">
           <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
             <svg
               className="w-8 h-8 text-green-600"
@@ -104,23 +119,23 @@ export default function RequestPage() {
             Request Submitted!
           </h2>
           <p className="text-gray-600 mb-6">
-            Thank you for your submission. Your work order request has been
-            received and will be reviewed shortly. You will be contacted at the
-            email address you provided.
+            Your repair request has been submitted successfully. Our team will
+            review it and get back to you shortly.
           </p>
           <button
             onClick={() => {
               setSubmitted(false);
               setFormData({
-                name: "",
-                email: "",
                 title: "",
                 description: "",
+                location: "",
                 priority: "medium",
+                requesterName: "",
+                requesterEmail: "",
+                requesterPhone: "",
               });
-              setErrors({});
             }}
-            className="w-full bg-blue-600 text-white py-2.5 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors"
+            className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition-colors"
           >
             Submit Another Request
           </button>
@@ -130,192 +145,228 @@ export default function RequestPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-12">
-      <div className="max-w-lg w-full">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">
-            Submit a Work Order
-          </h1>
-          <p className="mt-2 text-gray-600">
-            Fill out the form below to submit a new work order request.
-          </p>
-        </div>
+    <div className="min-h-screen bg-gray-50 py-12 px-4">
+      <div className="max-w-2xl mx-auto">
+        <div className="bg-white rounded-lg shadow-md overflow-hidden">
+          <div className="bg-blue-600 px-6 py-8 text-white">
+            <h1 className="text-3xl font-bold">Submit a Repair Request</h1>
+            <p className="mt-2 text-blue-100">
+              Fill out the form below to report a maintenance issue or request a
+              repair.
+            </p>
+          </div>
 
-        <div className="bg-white rounded-2xl shadow-lg p-8">
-          {serverError && (
-            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-              <p className="text-sm text-red-700">{serverError}</p>
+          <form onSubmit={handleSubmit} className="px-6 py-8 space-y-6">
+            {submitError && (
+              <div className="bg-red-50 border border-red-200 rounded-md p-4">
+                <p className="text-red-700 text-sm">{submitError}</p>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label
+                  htmlFor="title"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Request Title <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  id="title"
+                  name="title"
+                  value={formData.title}
+                  onChange={handleChange}
+                  placeholder="Brief description of the issue"
+                  className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                    errors.title ? "border-red-300" : "border-gray-300"
+                  }`}
+                />
+                {errors.title && (
+                  <p className="mt-1 text-sm text-red-600">{errors.title}</p>
+                )}
+              </div>
+
+              <div className="sm:col-span-2">
+                <label
+                  htmlFor="description"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Description <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  id="description"
+                  name="description"
+                  value={formData.description}
+                  onChange={handleChange}
+                  rows={4}
+                  placeholder="Please provide detailed information about the issue..."
+                  className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                    errors.description ? "border-red-300" : "border-gray-300"
+                  }`}
+                />
+                {errors.description && (
+                  <p className="mt-1 text-sm text-red-600">
+                    {errors.description}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label
+                  htmlFor="location"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Location <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  id="location"
+                  name="location"
+                  value={formData.location}
+                  onChange={handleChange}
+                  placeholder="Building, room, or area"
+                  className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                    errors.location ? "border-red-300" : "border-gray-300"
+                  }`}
+                />
+                {errors.location && (
+                  <p className="mt-1 text-sm text-red-600">{errors.location}</p>
+                )}
+              </div>
+
+              <div>
+                <label
+                  htmlFor="priority"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Priority <span className="text-red-500">*</span>
+                </label>
+                <select
+                  id="priority"
+                  name="priority"
+                  value={formData.priority}
+                  onChange={handleChange}
+                  className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                    errors.priority ? "border-red-300" : "border-gray-300"
+                  }`}
+                >
+                  <option value="low">Low — Not urgent</option>
+                  <option value="medium">Medium — Needs attention soon</option>
+                  <option value="high">High — Urgent issue</option>
+                  <option value="urgent">Urgent — Safety concern</option>
+                </select>
+                {errors.priority && (
+                  <p className="mt-1 text-sm text-red-600">{errors.priority}</p>
+                )}
+              </div>
+
+              <div>
+                <label
+                  htmlFor="requesterName"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Your Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  id="requesterName"
+                  name="requesterName"
+                  value={formData.requesterName}
+                  onChange={handleChange}
+                  placeholder="Full name"
+                  className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                    errors.requesterName ? "border-red-300" : "border-gray-300"
+                  }`}
+                />
+                {errors.requesterName && (
+                  <p className="mt-1 text-sm text-red-600">
+                    {errors.requesterName}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label
+                  htmlFor="requesterEmail"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Email Address <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="email"
+                  id="requesterEmail"
+                  name="requesterEmail"
+                  value={formData.requesterEmail}
+                  onChange={handleChange}
+                  placeholder="you@example.com"
+                  className={`w-full px-3 py-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                    errors.requesterEmail ? "border-red-300" : "border-gray-300"
+                  }`}
+                />
+                {errors.requesterEmail && (
+                  <p className="mt-1 text-sm text-red-600">
+                    {errors.requesterEmail}
+                  </p>
+                )}
+              </div>
+
+              <div className="sm:col-span-2">
+                <label
+                  htmlFor="requesterPhone"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Phone Number{" "}
+                  <span className="text-gray-400 text-xs">(optional)</span>
+                </label>
+                <input
+                  type="tel"
+                  id="requesterPhone"
+                  name="requesterPhone"
+                  value={formData.requesterPhone}
+                  onChange={handleChange}
+                  placeholder="(555) 000-0000"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
             </div>
-          )}
 
-          <form onSubmit={handleSubmit} noValidate className="space-y-5">
-            <div>
-              <label
-                htmlFor="name"
-                className="block text-sm font-medium text-gray-700 mb-1"
+            <div className="pt-4">
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full bg-blue-600 text-white py-3 px-6 rounded-md font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                Full Name <span className="text-red-500">*</span>
-              </label>
-              <input
-                id="name"
-                name="name"
-                type="text"
-                value={formData.name}
-                onChange={handleChange}
-                placeholder="John Doe"
-                className={`w-full px-3 py-2.5 border rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors ${
-                  errors.name ? "border-red-400 bg-red-50" : "border-gray-300"
-                }`}
-              />
-              {errors.name && (
-                <p className="mt-1 text-sm text-red-600">{errors.name}</p>
-              )}
+                {submitting ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <svg
+                      className="animate-spin h-5 w-5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                      />
+                    </svg>
+                    Submitting...
+                  </span>
+                ) : (
+                  "Submit Request"
+                )}
+              </button>
             </div>
-
-            <div>
-              <label
-                htmlFor="email"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Email Address <span className="text-red-500">*</span>
-              </label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                value={formData.email}
-                onChange={handleChange}
-                placeholder="john@example.com"
-                className={`w-full px-3 py-2.5 border rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors ${
-                  errors.email ? "border-red-400 bg-red-50" : "border-gray-300"
-                }`}
-              />
-              {errors.email && (
-                <p className="mt-1 text-sm text-red-600">{errors.email}</p>
-              )}
-            </div>
-
-            <div>
-              <label
-                htmlFor="title"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Request Title <span className="text-red-500">*</span>
-              </label>
-              <input
-                id="title"
-                name="title"
-                type="text"
-                value={formData.title}
-                onChange={handleChange}
-                placeholder="Brief summary of the issue"
-                className={`w-full px-3 py-2.5 border rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors ${
-                  errors.title ? "border-red-400 bg-red-50" : "border-gray-300"
-                }`}
-              />
-              {errors.title && (
-                <p className="mt-1 text-sm text-red-600">{errors.title}</p>
-              )}
-            </div>
-
-            <div>
-              <label
-                htmlFor="description"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Description <span className="text-red-500">*</span>
-              </label>
-              <textarea
-                id="description"
-                name="description"
-                rows={4}
-                value={formData.description}
-                onChange={handleChange}
-                placeholder="Please provide detailed information about your request..."
-                className={`w-full px-3 py-2.5 border rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors resize-none ${
-                  errors.description
-                    ? "border-red-400 bg-red-50"
-                    : "border-gray-300"
-                }`}
-              />
-              {errors.description && (
-                <p className="mt-1 text-sm text-red-600">
-                  {errors.description}
-                </p>
-              )}
-            </div>
-
-            <div>
-              <label
-                htmlFor="priority"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Priority <span className="text-red-500">*</span>
-              </label>
-              <select
-                id="priority"
-                name="priority"
-                value={formData.priority}
-                onChange={handleChange}
-                className={`w-full px-3 py-2.5 border rounded-lg text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors bg-white ${
-                  errors.priority
-                    ? "border-red-400 bg-red-50"
-                    : "border-gray-300"
-                }`}
-              >
-                <option value="low">Low — Can wait, not time-sensitive</option>
-                <option value="medium">
-                  Medium — Should be addressed soon
-                </option>
-                <option value="high">High — Needs prompt attention</option>
-                <option value="urgent">
-                  Urgent — Immediate action required
-                </option>
-              </select>
-              {errors.priority && (
-                <p className="mt-1 text-sm text-red-600">{errors.priority}</p>
-              )}
-            </div>
-
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed transition-colors mt-2"
-            >
-              {isSubmitting ? (
-                <span className="flex items-center justify-center gap-2">
-                  <svg
-                    className="animate-spin h-4 w-4"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8v8H4z"
-                    />
-                  </svg>
-                  Submitting...
-                </span>
-              ) : (
-                "Submit Work Order"
-              )}
-            </button>
           </form>
         </div>
-
-        <p className="text-center text-sm text-gray-500 mt-4">
-          Fields marked with <span className="text-red-500">*</span> are
-          required.
-        </p>
       </div>
     </div>
   );
