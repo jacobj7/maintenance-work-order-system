@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import bcryptjs from "bcryptjs";
+import bcrypt from "bcryptjs";
 import { query } from "@/lib/db";
-
-export const dynamic = "force-dynamic";
 
 const registerSchema = z.object({
   email: z.string().email("Invalid email address"),
   password: z.string().min(8, "Password must be at least 8 characters"),
-  role: z.enum(["admin", "user", "moderator"]).default("user"),
+  name: z.string().min(1, "Name is required"),
 });
 
 export async function POST(request: NextRequest) {
@@ -16,6 +14,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
 
     const validationResult = registerSchema.safeParse(body);
+
     if (!validationResult.success) {
       return NextResponse.json(
         {
@@ -26,7 +25,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { email, password, role } = validationResult.data;
+    const { email, password, name } = validationResult.data;
 
     const existingUser = await query("SELECT id FROM users WHERE email = $1", [
       email,
@@ -40,18 +39,30 @@ export async function POST(request: NextRequest) {
     }
 
     const saltRounds = 12;
-    const password_hash = await bcryptjs.hash(password, saltRounds);
+    const passwordHash = await bcrypt.hash(password, saltRounds);
 
     const result = await query(
-      `INSERT INTO users (email, password_hash, role, created_at, updated_at)
-       VALUES ($1, $2, $3, NOW(), NOW())
-       RETURNING id`,
-      [email, password_hash, role],
+      `INSERT INTO users (email, password_hash, name, role, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, NOW(), NOW())
+       RETURNING id, email, name, role, created_at`,
+      [email, passwordHash, name, "Requester"],
     );
 
     const newUser = result.rows[0];
 
-    return NextResponse.json({ id: newUser.id }, { status: 201 });
+    return NextResponse.json(
+      {
+        message: "User registered successfully",
+        user: {
+          id: newUser.id,
+          email: newUser.email,
+          name: newUser.name,
+          role: newUser.role,
+          createdAt: newUser.created_at,
+        },
+      },
+      { status: 201 },
+    );
   } catch (error) {
     console.error("Registration error:", error);
     return NextResponse.json(
