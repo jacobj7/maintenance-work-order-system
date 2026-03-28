@@ -1,147 +1,146 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { z } from "zod";
 import { query } from "@/lib/db";
+import { authOptions } from "@/lib/auth";
 
-export async function GET() {
+export const dynamic = "force-dynamic";
+
+const createAssetSchema = z.object({
+  name: z.string().min(1, "Name is required").max(255),
+  facility_id: z
+    .number()
+    .int()
+    .positive("Facility ID must be a positive integer"),
+  location_id: z
+    .number()
+    .int()
+    .positive("Location ID must be a positive integer")
+    .optional()
+    .nullable(),
+  category: z.string().min(1, "Category is required").max(100),
+  serial_number: z.string().max(255).optional().nullable(),
+});
+
+export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const result = await query(
-      "SELECT * FROM assets ORDER BY created_at DESC",
-      [],
-    );
+    const { searchParams } = new URL(request.url);
+    const facilityId = searchParams.get("facility_id");
 
-    return NextResponse.json(result.rows || []);
-  } catch (error: unknown) {
-    console.error("Error fetching assets:", error);
-    return NextResponse.json([], { status: 200 });
-  }
-}
-
-export async function POST(req: NextRequest) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    let result;
+    if (facilityId) {
+      const parsedFacilityId = parseInt(facilityId, 10);
+      if (isNaN(parsedFacilityId)) {
+        return NextResponse.json(
+          { error: "Invalid facility_id parameter" },
+          { status: 400 },
+        );
+      }
+      result = await query(
+        `SELECT 
+          a.id,
+          a.name,
+          a.facility_id,
+          a.location_id,
+          a.category,
+          a.serial_number,
+          a.created_at,
+          a.updated_at,
+          f.name AS facility_name,
+          l.name AS location_name
+        FROM assets a
+        LEFT JOIN facilities f ON a.facility_id = f.id
+        LEFT JOIN locations l ON a.location_id = l.id
+        WHERE a.facility_id = $1
+        ORDER BY a.created_at DESC`,
+        [parsedFacilityId],
+      );
+    } else {
+      result = await query(
+        `SELECT 
+          a.id,
+          a.name,
+          a.facility_id,
+          a.location_id,
+          a.category,
+          a.serial_number,
+          a.created_at,
+          a.updated_at,
+          f.name AS facility_name,
+          l.name AS location_name
+        FROM assets a
+        LEFT JOIN facilities f ON a.facility_id = f.id
+        LEFT JOIN locations l ON a.location_id = l.id
+        ORDER BY a.created_at DESC`,
+        [],
+      );
     }
 
-    const body = await req.json();
-    const {
-      name,
-      asset_tag,
-      category,
-      status,
-      location,
-      assigned_to,
-      purchase_date,
-      purchase_cost,
-      notes,
-    } = body;
-
-    const result = await query(
-      `INSERT INTO assets (name, asset_tag, category, status, location, assigned_to, purchase_date, purchase_cost, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [
-        name,
-        asset_tag,
-        category,
-        status || "active",
-        location,
-        assigned_to,
-        purchase_date,
-        purchase_cost,
-        notes,
-      ],
-    );
-
-    return NextResponse.json(result.rows[0], { status: 201 });
-  } catch (error: unknown) {
-    console.error("Error creating asset:", error);
+    return NextResponse.json({ assets: result.rows }, { status: 200 });
+  } catch (error) {
+    console.error("GET /api/assets error:", error);
     return NextResponse.json(
-      { error: "Failed to create asset" },
+      { error: "Internal server error" },
       { status: 500 },
     );
   }
 }
 
-export async function PUT(req: NextRequest) {
+export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { searchParams } = new URL(req.url);
-    const id = searchParams.get("id");
-    if (!id) {
-      return NextResponse.json({ error: "ID required" }, { status: 400 });
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
-    const body = await req.json();
-    const {
-      name,
-      asset_tag,
-      category,
-      status,
-      location,
-      assigned_to,
-      purchase_date,
-      purchase_cost,
-      notes,
-    } = body;
+    const validationResult = createAssetSchema.safeParse(body);
+    if (!validationResult.success) {
+      return NextResponse.json(
+        {
+          error: "Validation failed",
+          details: validationResult.error.flatten().fieldErrors,
+        },
+        { status: 422 },
+      );
+    }
+
+    const { name, facility_id, location_id, category, serial_number } =
+      validationResult.data;
 
     const result = await query(
-      `UPDATE assets SET name=$1, asset_tag=$2, category=$3, status=$4, location=$5,
-       assigned_to=$6, purchase_date=$7, purchase_cost=$8, notes=$9, updated_at=NOW()
-       WHERE id=$10 RETURNING *`,
-      [
-        name,
-        asset_tag,
-        category,
-        status,
-        location,
-        assigned_to,
-        purchase_date,
-        purchase_cost,
-        notes,
-        id,
-      ],
+      `INSERT INTO assets (name, facility_id, location_id, category, serial_number, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+       RETURNING 
+         id,
+         name,
+         facility_id,
+         location_id,
+         category,
+         serial_number,
+         created_at,
+         updated_at`,
+      [name, facility_id, location_id ?? null, category, serial_number ?? null],
     );
 
-    return NextResponse.json(result.rows[0]);
-  } catch (error: unknown) {
-    console.error("Error updating asset:", error);
+    const asset = result.rows[0];
+
+    return NextResponse.json({ asset }, { status: 201 });
+  } catch (error) {
+    console.error("POST /api/assets error:", error);
     return NextResponse.json(
-      { error: "Failed to update asset" },
-      { status: 500 },
-    );
-  }
-}
-
-export async function DELETE(req: NextRequest) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const { searchParams } = new URL(req.url);
-    const id = searchParams.get("id");
-    if (!id) {
-      return NextResponse.json({ error: "ID required" }, { status: 400 });
-    }
-
-    await query("DELETE FROM assets WHERE id=$1", [id]);
-    return NextResponse.json({ success: true });
-  } catch (error: unknown) {
-    console.error("Error deleting asset:", error);
-    return NextResponse.json(
-      { error: "Failed to delete asset" },
+      { error: "Internal server error" },
       { status: 500 },
     );
   }

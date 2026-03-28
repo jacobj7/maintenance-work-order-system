@@ -21,7 +21,12 @@
     "autoprefixer": "^10",
     "zod": "^3.23.0",
     "@anthropic-ai/sdk": "^0.30.0",
-    "@eslint/eslintrc": "*"
+    "date-fns": "^3.6.0",
+    "@eslint/eslintrc": "*",
+    "dotenv": "*",
+    "eslint": "^9.0.0",
+    "@eslint/js": "^9.0.0",
+    "eslint-config-next": "15.0.0"
   },
   "devDependencies": {
     "typescript": "^5",
@@ -29,10 +34,6 @@
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@types/pg": "^8.11.0",
-    "@types/bcryptjs": "^2.4.0",
-    "eslint": "^9.0.0",
-    "eslint-config-next": "15.0.0",
-    "@eslint/js": "^9.0.0",
-    "@eslint/eslintrc": "^3.0.0"
+    "@types/bcryptjs": "^2.4.0"
   }
 }

@@ -1,23 +1,31 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import { authOptions } from "@/lib/auth";
-import DashboardClient from "./DashboardClient";
+import { query } from "@/lib/db";
+import DashboardClient from "@/components/DashboardClient";
 
-async function getDashboardSummary() {
-  const baseUrl = process.env.NEXTAUTH_URL || "http://localhost:3000";
+interface WorkOrder {
+  id: number;
+  title: string;
+  status: string;
+  priority: string;
+  due_date: string | null;
+  assigned_to: string | null;
+  created_at: string;
+}
 
-  const response = await fetch(`${baseUrl}/api/dashboard/summary`, {
-    cache: "no-store",
-  });
+interface WorkOrdersByStatus {
+  [status: string]: WorkOrder[];
+}
 
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch dashboard summary: ${response.statusText}`,
-    );
-  }
-
-  const data = await response.json();
-  return data;
+interface SerializedWorkOrder {
+  id: number;
+  title: string;
+  status: string;
+  priority: string;
+  due_date: string | null;
+  assigned_to: string | null;
+  created_at: string;
 }
 
 export default async function DashboardPage() {
@@ -27,29 +35,82 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  let summary = null;
-  let error: string | null = null;
+  let workOrders: WorkOrder[] = [];
 
   try {
-    summary = await getDashboardSummary();
-  } catch (err) {
-    error =
-      err instanceof Error ? err.message : "Failed to load dashboard data";
+    const result = await query(
+      `SELECT 
+        id,
+        title,
+        status,
+        priority,
+        due_date,
+        assigned_to,
+        created_at
+      FROM work_orders
+      ORDER BY created_at DESC`,
+      [],
+    );
+    workOrders = result.rows as WorkOrder[];
+  } catch (error) {
+    console.error("Failed to fetch work orders:", error);
+    workOrders = [];
   }
 
-  const serializedSummary = summary
-    ? JSON.parse(JSON.stringify(summary))
-    : null;
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+
+  const overdueCount = workOrders.filter((wo) => {
+    if (!wo.due_date) return false;
+    if (wo.status === "completed" || wo.status === "cancelled") return false;
+    const dueDate = new Date(wo.due_date);
+    dueDate.setHours(0, 0, 0, 0);
+    return dueDate < now;
+  }).length;
+
+  const workOrdersByStatus: WorkOrdersByStatus = workOrders.reduce(
+    (acc: WorkOrdersByStatus, wo: WorkOrder) => {
+      const status = wo.status || "unknown";
+      if (!acc[status]) {
+        acc[status] = [];
+      }
+      acc[status].push(wo);
+      return acc;
+    },
+    {},
+  );
+
+  const serializedWorkOrdersByStatus: {
+    [status: string]: SerializedWorkOrder[];
+  } = {};
+
+  for (const [status, orders] of Object.entries(workOrdersByStatus)) {
+    serializedWorkOrdersByStatus[status] = orders.map((wo) => ({
+      id: wo.id,
+      title: wo.title,
+      status: wo.status,
+      priority: wo.priority,
+      due_date: wo.due_date ? new Date(wo.due_date).toISOString() : null,
+      assigned_to: wo.assigned_to,
+      created_at: new Date(wo.created_at).toISOString(),
+    }));
+  }
+
+  const totalCount = workOrders.length;
+
+  const statusCounts: { [status: string]: number } = {};
+  for (const [status, orders] of Object.entries(workOrdersByStatus)) {
+    statusCounts[status] = orders.length;
+  }
 
   return (
     <DashboardClient
-      summary={serializedSummary}
-      error={error}
-      user={{
-        name: session.user?.name ?? null,
-        email: session.user?.email ?? null,
-        image: session.user?.image ?? null,
-      }}
+      workOrdersByStatus={serializedWorkOrdersByStatus}
+      overdueCount={overdueCount}
+      totalCount={totalCount}
+      statusCounts={statusCounts}
+      userEmail={session.user?.email ?? null}
+      userName={session.user?.name ?? null}
     />
   );
 }

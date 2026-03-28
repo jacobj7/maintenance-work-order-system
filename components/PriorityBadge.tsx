@@ -1,59 +1,42 @@
-import React from "react";
-
-type Priority = "low" | "medium" | "high" | "urgent";
-
-interface PriorityBadgeProps {
-  priority: Priority;
-  className?: string;
-}
-
-const priorityConfig: Record<
-  Priority,
-  { label: string; bgColor: string; textColor: string; borderColor: string }
-> = {
+const priorityConfig: Record<string, { label: string; className: string }> = {
   low: {
     label: "Low",
-    bgColor: "bg-gray-100",
-    textColor: "text-gray-700",
-    borderColor: "border-gray-300",
+    className: "bg-gray-100 text-gray-700 border border-gray-200",
   },
   medium: {
     label: "Medium",
-    bgColor: "bg-blue-100",
-    textColor: "text-blue-700",
-    borderColor: "border-blue-300",
+    className: "bg-yellow-100 text-yellow-700 border border-yellow-200",
   },
   high: {
     label: "High",
-    bgColor: "bg-orange-100",
-    textColor: "text-orange-700",
-    borderColor: "border-orange-300",
+    className: "bg-orange-100 text-orange-700 border border-orange-200",
   },
-  urgent: {
-    label: "Urgent",
-    bgColor: "bg-red-100",
-    textColor: "text-red-700",
-    borderColor: "border-red-300",
+  critical: {
+    label: "Critical",
+    className: "bg-red-100 text-red-700 border border-red-200",
   },
 };
 
-export function PriorityBadge({
+interface PriorityBadgeProps {
+  priority: string;
+  className?: string;
+}
+
+export default function PriorityBadge({
   priority,
   className = "",
 }: PriorityBadgeProps) {
-  const config = priorityConfig[priority];
-
-  if (!config) {
-    return null;
-  }
+  const normalizedPriority = priority?.toLowerCase() ?? "";
+  const config = priorityConfig[normalizedPriority] ?? {
+    label: priority ?? "Unknown",
+    className: "bg-gray-100 text-gray-500 border border-gray-200",
+  };
 
   return (
     <span
-      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${config.bgColor} ${config.textColor} ${config.borderColor} ${className}`}
+      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.className} ${className}`}
     >
       {config.label}
     </span>
   );
 }
-
-export default PriorityBadge;

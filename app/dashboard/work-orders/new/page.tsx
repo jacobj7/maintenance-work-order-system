@@ -1,12 +1,21 @@
 import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { Pool } from "pg";
-import NewWorkOrderClient from "./NewWorkOrderClient";
+import { authOptions } from "@/lib/auth";
+import { query } from "@/lib/db";
+import NewWorkOrderClient from "@/components/work-orders/NewWorkOrderClient";
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+interface Asset {
+  id: number;
+  name: string;
+  asset_tag: string | null;
+  location_id: number | null;
+}
+
+interface Location {
+  id: number;
+  name: string;
+  description: string | null;
+}
 
 export default async function NewWorkOrderPage() {
   const session = await getServerSession(authOptions);
@@ -15,59 +24,27 @@ export default async function NewWorkOrderPage() {
     redirect("/login");
   }
 
-  let assets: { id: string; name: string; location: string }[] = [];
-  let technicians: { id: string; name: string; email: string }[] = [];
+  const assetsResult = await query<Asset>(
+    `SELECT id, name, asset_tag, location_id
+     FROM assets
+     ORDER BY name ASC`,
+    [],
+  );
 
-  try {
-    const client = await pool.connect();
+  const locationsResult = await query<Location>(
+    `SELECT id, name, description
+     FROM locations
+     ORDER BY name ASC`,
+    [],
+  );
 
-    try {
-      const assetsResult = await client.query<{
-        id: string;
-        name: string;
-        location: string;
-      }>(
-        `SELECT id::text, name, COALESCE(location, '') as location
-         FROM assets
-         ORDER BY name ASC`,
-      );
-
-      assets = assetsResult.rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        location: row.location,
-      }));
-
-      const techniciansResult = await client.query<{
-        id: string;
-        name: string;
-        email: string;
-      }>(
-        `SELECT id::text, name, email
-         FROM users
-         WHERE role = 'technician' OR role = 'admin'
-         ORDER BY name ASC`,
-      );
-
-      technicians = techniciansResult.rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        email: row.email,
-      }));
-    } finally {
-      client.release();
-    }
-  } catch (error) {
-    console.error("Error fetching data for new work order:", error);
-  }
-
-  const serializedAssets = JSON.parse(JSON.stringify(assets));
-  const serializedTechnicians = JSON.parse(JSON.stringify(technicians));
+  const assets: Asset[] = assetsResult.rows ?? [];
+  const locations: Location[] = locationsResult.rows ?? [];
 
   return (
     <NewWorkOrderClient
-      assets={serializedAssets}
-      technicians={serializedTechnicians}
+      assets={JSON.parse(JSON.stringify(assets))}
+      locations={JSON.parse(JSON.stringify(locations))}
     />
   );
 }
