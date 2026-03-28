@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { query } from "@/lib/db";
@@ -7,67 +7,71 @@ const registerSchema = z.object({
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Invalid email address"),
   password: z.string().min(8, "Password must be at least 8 characters"),
+  role: z.enum(["admin", "technician", "requestor"]).default("requestor"),
 });
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const parsed = registerSchema.safeParse(body);
 
-    if (!parsed.success) {
+    const validationResult = registerSchema.safeParse(body);
+    if (!validationResult.success) {
       return NextResponse.json(
-        { error: "Validation failed", details: parsed.error.flatten() },
+        {
+          error: "Validation failed",
+          details: validationResult.error.flatten(),
+        },
         { status: 400 },
       );
     }
 
-    const { name, email, password } = parsed.data;
+    const { name, email, password, role } = validationResult.data;
 
-    const existingUsers = await query<{ id: string }>(
+    const existingUsersResult = await query<{ id: string }>(
       "SELECT id FROM users WHERE email = $1",
       [email],
     );
 
-    if (existingUsers.length > 0) {
+    if (existingUsersResult.rows.length > 0) {
       return NextResponse.json(
-        { error: "An account with this email already exists" },
+        { error: "A user with this email already exists" },
         { status: 409 },
       );
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
 
-    const hardcodedRole = "requestor";
-
-    const newUsers = await query<{
+    const newUsersResult = await query<{
       id: string;
       name: string;
       email: string;
       role: string;
+      created_at: string;
     }>(
       `INSERT INTO users (name, email, password_hash, role, created_at, updated_at)
        VALUES ($1, $2, $3, $4, NOW(), NOW())
-       RETURNING id, name, email, role`,
-      [name, email, passwordHash, hardcodedRole],
+       RETURNING id, name, email, role, created_at`,
+      [name, email, passwordHash, role],
     );
 
-    if (newUsers.length === 0) {
+    if (newUsersResult.rows.length === 0) {
       return NextResponse.json(
-        { error: "Failed to create account" },
+        { error: "Failed to create user" },
         { status: 500 },
       );
     }
 
-    const newUser = newUsers[0];
+    const newUser = newUsersResult.rows[0];
 
     return NextResponse.json(
       {
-        message: "Account created successfully",
+        message: "User registered successfully",
         user: {
           id: newUser.id,
           name: newUser.name,
           email: newUser.email,
           role: newUser.role,
+          createdAt: newUser.created_at,
         },
       },
       { status: 201 },
