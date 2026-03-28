@@ -3,46 +3,29 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { query } from "@/lib/db";
 
-export const dynamic = "force-dynamic";
-
 const registerSchema = z.object({
-  name: z.string().min(1, "Name is required").max(255),
-  email: z.string().email("Invalid email address").max(255),
-  password: z
-    .string()
-    .min(8, "Password must be at least 8 characters")
-    .max(128),
-  role: z.string().min(1, "Role is required").max(50),
+  name: z.string().min(1).max(100),
+  email: z.string().email().max(255),
+  password: z.string().min(8).max(128),
 });
 
 export async function POST(request: NextRequest) {
-  let body: unknown;
-
   try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-  }
+    const body = await request.json();
 
-  const parseResult = registerSchema.safeParse(body);
+    const parseResult = registerSchema.safeParse(body);
+    if (!parseResult.success) {
+      return NextResponse.json(
+        { error: "Invalid input", details: parseResult.error.flatten() },
+        { status: 400 },
+      );
+    }
 
-  if (!parseResult.success) {
-    return NextResponse.json(
-      {
-        error: "Validation error",
-        details: parseResult.error.flatten().fieldErrors,
-      },
-      { status: 400 },
-    );
-  }
+    const { name, email, password } = parseResult.data;
 
-  const { name, email, password, role } = parseResult.data;
-
-  try {
-    const existingUser = await query(
-      "SELECT id FROM users WHERE email = $1 LIMIT 1",
-      [email],
-    );
+    const existingUser = await query("SELECT id FROM users WHERE email = $1", [
+      email,
+    ]);
 
     if (existingUser.rows.length > 0) {
       return NextResponse.json(
@@ -57,7 +40,7 @@ export async function POST(request: NextRequest) {
       `INSERT INTO users (name, email, password_hash, role, created_at, updated_at)
        VALUES ($1, $2, $3, $4, NOW(), NOW())
        RETURNING id, name, email, role, created_at`,
-      [name, email, passwordHash, role],
+      [name, email, passwordHash, "technician"],
     );
 
     const newUser = result.rows[0];
