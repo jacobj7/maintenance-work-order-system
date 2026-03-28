@@ -1,32 +1,28 @@
 import { Pool } from "pg";
 
-const globalForPg = globalThis as unknown as { _pgPool: Pool | undefined };
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
 
-const pool =
-  globalForPg._pgPool ??
-  new Pool({
-    connectionString: process.env.DATABASE_URL,
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
-  });
+export { pool };
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPg._pgPool = pool;
-}
-
-async function query<T = unknown>(
+export async function query<T = any>(
   sql: string,
-  params: unknown[] = [],
-): Promise<
-  import("pg").QueryResult<T extends Record<string, unknown> ? T : never>
-> {
+  params: any[] = [],
+): Promise<{ rows: T[]; rowCount: number | null }> {
   const client = await pool.connect();
   try {
-    return await client.query(sql, params);
+    const result = await client.query(sql, params);
+    return { rows: result.rows, rowCount: result.rowCount };
   } finally {
     client.release();
   }
 }
 
-export { pool, query };
+if (process.env.NODE_ENV === "development") {
+  import("@/db/migrate").catch((err) => {
+    console.error("Migration error:", err);
+  });
+}
+
+export default pool;

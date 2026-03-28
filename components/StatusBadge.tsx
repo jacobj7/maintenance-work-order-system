@@ -7,6 +7,10 @@ const STATUS_CONFIG = {
     label: "In Progress",
     className: "bg-yellow-100 text-yellow-800 border border-yellow-200",
   },
+  on_hold: {
+    label: "On Hold",
+    className: "bg-orange-100 text-orange-800 border border-orange-200",
+  },
   completed: {
     label: "Completed",
     className: "bg-green-100 text-green-800 border border-green-200",

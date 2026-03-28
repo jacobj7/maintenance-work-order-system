@@ -17,11 +17,15 @@
     "pg": "^8.12.0",
     "bcryptjs": "^2.4.3",
     "tailwindcss": "^3",
-    "postcss": "^8",
-    "autoprefixer": "^10",
     "zod": "^3.23.0",
     "@anthropic-ai/sdk": "^0.30.0",
-    "@eslint/eslintrc": "*"
+    "date-fns": "^3.6.0",
+    "@eslint/eslintrc": "*",
+    "postcss": "^8.4.0",
+    "autoprefixer": "^10.4.0",
+    "eslint": "^9.0.0",
+    "@eslint/js": "^9.0.0",
+    "eslint-config-next": "15.0.0"
   },
   "devDependencies": {
     "typescript": "^5",
@@ -30,9 +34,7 @@
     "@types/react-dom": "^18",
     "@types/pg": "^8.11.0",
     "@types/bcryptjs": "^2.4.0",
-    "eslint": "^9.0.0",
-    "eslint-config-next": "15.0.0",
-    "@eslint/js": "^9.0.0",
-    "@eslint/eslintrc": "^3.0.0"
+    "postcss": "^8",
+    "autoprefixer": "^10"
   }
 }
