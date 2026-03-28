@@ -1,222 +1,271 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-
-type WorkOrderStatus = "open" | "in_progress" | "completed" | "cancelled";
-type WorkOrderPriority = "low" | "medium" | "high" | "urgent";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { format, parseISO } from "date-fns";
 
 interface WorkOrder {
   id: string;
   title: string;
   description: string;
-  status: WorkOrderStatus;
-  priority: WorkOrderPriority;
-  assignee: string | null;
-  createdAt: string;
-  updatedAt: string;
-  dueDate: string | null;
+  status: "open" | "in_progress" | "on_hold" | "completed" | "cancelled";
+  priority: "low" | "medium" | "high" | "critical";
+  assignee_name: string | null;
+  created_at: string;
+  updated_at: string;
+  due_date: string | null;
 }
 
-interface WorkOrdersClientProps {
+interface WorkOrdersResponse {
   workOrders: WorkOrder[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 }
 
-const statusColors: Record<WorkOrderStatus, string> = {
+const STATUS_OPTIONS = [
+  { value: "", label: "All Statuses" },
+  { value: "open", label: "Open" },
+  { value: "in_progress", label: "In Progress" },
+  { value: "on_hold", label: "On Hold" },
+  { value: "completed", label: "Completed" },
+  { value: "cancelled", label: "Cancelled" },
+];
+
+const PRIORITY_OPTIONS = [
+  { value: "", label: "All Priorities" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "critical", label: "Critical" },
+];
+
+const STATUS_BADGE_STYLES: Record<string, string> = {
   open: "bg-blue-100 text-blue-800",
   in_progress: "bg-yellow-100 text-yellow-800",
+  on_hold: "bg-gray-100 text-gray-800",
   completed: "bg-green-100 text-green-800",
-  cancelled: "bg-gray-100 text-gray-800",
+  cancelled: "bg-red-100 text-red-800",
 };
 
-const statusLabels: Record<WorkOrderStatus, string> = {
+const PRIORITY_BADGE_STYLES: Record<string, string> = {
+  low: "bg-slate-100 text-slate-700",
+  medium: "bg-orange-100 text-orange-700",
+  high: "bg-red-100 text-red-700",
+  critical: "bg-red-200 text-red-900 font-bold",
+};
+
+const STATUS_LABELS: Record<string, string> = {
   open: "Open",
   in_progress: "In Progress",
+  on_hold: "On Hold",
   completed: "Completed",
   cancelled: "Cancelled",
 };
 
-const priorityColors: Record<WorkOrderPriority, string> = {
-  low: "bg-slate-100 text-slate-700",
-  medium: "bg-orange-100 text-orange-700",
-  high: "bg-red-100 text-red-700",
-  urgent: "bg-red-600 text-white",
-};
-
-const priorityLabels: Record<WorkOrderPriority, string> = {
+const PRIORITY_LABELS: Record<string, string> = {
   low: "Low",
   medium: "Medium",
   high: "High",
-  urgent: "Urgent",
+  critical: "Critical",
 };
 
-function StatusBadge({ status }: { status: WorkOrderStatus }) {
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColors[status]}`}
-    >
-      {statusLabels[status]}
-    </span>
+const PAGE_SIZE = 10;
+
+export default function WorkOrdersClient() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const [data, setData] = useState<WorkOrdersResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const search = searchParams.get("search") ?? "";
+  const status = searchParams.get("status") ?? "";
+  const priority = searchParams.get("priority") ?? "";
+  const page = parseInt(searchParams.get("page") ?? "1", 10);
+
+  const [searchInput, setSearchInput] = useState(search);
+
+  const updateParams = useCallback(
+    (updates: Record<string, string>) => {
+      const params = new URLSearchParams(searchParams.toString());
+      Object.entries(updates).forEach(([key, value]) => {
+        if (value) {
+          params.set(key, value);
+        } else {
+          params.delete(key);
+        }
+      });
+      router.push(`${pathname}?${params.toString()}`);
+    },
+    [searchParams, pathname, router],
   );
-}
 
-function PriorityBadge({ priority }: { priority: WorkOrderPriority }) {
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${priorityColors[priority]}`}
-    >
-      {priorityLabels[priority]}
-    </span>
-  );
-}
+  const fetchWorkOrders = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (search) params.set("search", search);
+      if (status) params.set("status", status);
+      if (priority) params.set("priority", priority);
+      params.set("page", String(page));
+      params.set("pageSize", String(PAGE_SIZE));
 
-export default function WorkOrdersClient({
-  workOrders,
-}: WorkOrdersClientProps) {
-  const [statusFilter, setStatusFilter] = useState<WorkOrderStatus | "all">(
-    "all",
-  );
-  const [priorityFilter, setPriorityFilter] = useState<
-    WorkOrderPriority | "all"
-  >("all");
-  const [searchQuery, setSearchQuery] = useState("");
+      const res = await fetch(`/api/work-orders?${params.toString()}`);
+      if (!res.ok) {
+        throw new Error(`Failed to fetch work orders: ${res.statusText}`);
+      }
+      const json: WorkOrdersResponse = await res.json();
+      setData(json);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "An error occurred");
+    } finally {
+      setLoading(false);
+    }
+  }, [search, status, priority, page]);
 
-  const filteredWorkOrders = workOrders.filter((wo) => {
-    const matchesStatus = statusFilter === "all" || wo.status === statusFilter;
-    const matchesPriority =
-      priorityFilter === "all" || wo.priority === priorityFilter;
-    const matchesSearch =
-      searchQuery === "" ||
-      wo.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      wo.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (wo.assignee &&
-        wo.assignee.toLowerCase().includes(searchQuery.toLowerCase()));
-    return matchesStatus && matchesPriority && matchesSearch;
-  });
+  useEffect(() => {
+    fetchWorkOrders();
+  }, [fetchWorkOrders]);
 
-  const formatDate = (dateString: string | null) => {
-    if (!dateString) return "—";
-    return new Date(dateString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
+  useEffect(() => {
+    setSearchInput(search);
+  }, [search]);
+
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    updateParams({ search: searchInput, page: "" });
+  };
+
+  const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    updateParams({ status: e.target.value, page: "" });
+  };
+
+  const handlePriorityChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    updateParams({ priority: e.target.value, page: "" });
+  };
+
+  const handlePageChange = (newPage: number) => {
+    updateParams({ page: String(newPage) });
+  };
+
+  const formatDate = (dateStr: string | null) => {
+    if (!dateStr) return "—";
+    try {
+      return format(parseISO(dateStr), "MMM d, yyyy");
+    } catch {
+      return "—";
+    }
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
-        <div className="mb-8 flex items-center justify-between">
+        <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Work Orders</h1>
-            <p className="mt-1 text-sm text-gray-500">
-              {filteredWorkOrders.length} of {workOrders.length} work orders
-            </p>
+            {data && (
+              <p className="mt-1 text-sm text-gray-500">
+                {data.total} total work order{data.total !== 1 ? "s" : ""}
+              </p>
+            )}
           </div>
           <Link
             href="/work-orders/new"
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+            className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors"
           >
             <svg
+              className="-ml-1 mr-2 h-5 w-5"
               xmlns="http://www.w3.org/2000/svg"
               viewBox="0 0 20 20"
               fill="currentColor"
-              className="h-5 w-5"
+              aria-hidden="true"
             >
-              <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
+              <path
+                fillRule="evenodd"
+                d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
+                clipRule="evenodd"
+              />
             </svg>
             New Work Order
           </Link>
         </div>
 
         {/* Filters */}
-        <div className="mb-6 rounded-xl bg-white p-4 shadow-sm border border-gray-200">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
+          <div className="flex flex-col sm:flex-row gap-4">
             {/* Search */}
-            <div className="relative flex-1">
-              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                  className="h-4 w-4 text-gray-400"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z"
-                    clipRule="evenodd"
-                  />
-                </svg>
+            <form onSubmit={handleSearchSubmit} className="flex-1">
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <svg
+                    className="h-5 w-5 text-gray-400"
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </div>
+                <input
+                  type="text"
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  placeholder="Search work orders..."
+                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                />
               </div>
-              <input
-                type="text"
-                placeholder="Search work orders..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="block w-full rounded-lg border border-gray-300 bg-white py-2 pl-10 pr-3 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
+            </form>
 
             {/* Status Filter */}
-            <div className="flex items-center gap-2">
-              <label
-                htmlFor="status-filter"
-                className="text-sm font-medium text-gray-700 whitespace-nowrap"
-              >
-                Status:
-              </label>
+            <div className="sm:w-48">
               <select
-                id="status-filter"
-                value={statusFilter}
-                onChange={(e) =>
-                  setStatusFilter(e.target.value as WorkOrderStatus | "all")
-                }
-                className="rounded-lg border border-gray-300 bg-white py-2 pl-3 pr-8 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                value={status}
+                onChange={handleStatusChange}
+                className="block w-full pl-3 pr-10 py-2 text-base border border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md bg-white"
               >
-                <option value="all">All Statuses</option>
-                <option value="open">Open</option>
-                <option value="in_progress">In Progress</option>
-                <option value="completed">Completed</option>
-                <option value="cancelled">Cancelled</option>
+                {STATUS_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
               </select>
             </div>
 
             {/* Priority Filter */}
-            <div className="flex items-center gap-2">
-              <label
-                htmlFor="priority-filter"
-                className="text-sm font-medium text-gray-700 whitespace-nowrap"
-              >
-                Priority:
-              </label>
+            <div className="sm:w-48">
               <select
-                id="priority-filter"
-                value={priorityFilter}
-                onChange={(e) =>
-                  setPriorityFilter(e.target.value as WorkOrderPriority | "all")
-                }
-                className="rounded-lg border border-gray-300 bg-white py-2 pl-3 pr-8 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                value={priority}
+                onChange={handlePriorityChange}
+                className="block w-full pl-3 pr-10 py-2 text-base border border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md bg-white"
               >
-                <option value="all">All Priorities</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-                <option value="urgent">Urgent</option>
+                {PRIORITY_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
               </select>
             </div>
 
             {/* Clear Filters */}
-            {(statusFilter !== "all" ||
-              priorityFilter !== "all" ||
-              searchQuery !== "") && (
+            {(search || status || priority) && (
               <button
                 onClick={() => {
-                  setStatusFilter("all");
-                  setPriorityFilter("all");
-                  setSearchQuery("");
+                  setSearchInput("");
+                  router.push(pathname);
                 }}
-                className="text-sm text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap transition-colors"
+                className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors whitespace-nowrap"
               >
                 Clear filters
               </button>
@@ -224,142 +273,298 @@ export default function WorkOrdersClient({
           </div>
         </div>
 
-        {/* Table */}
-        <div className="overflow-hidden rounded-xl bg-white shadow-sm border border-gray-200">
-          {filteredWorkOrders.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
+        {/* Content */}
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-6">
+            <div className="flex">
               <svg
+                className="h-5 w-5 text-red-400 mr-3 flex-shrink-0"
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
+                  clipRule="evenodd"
+                />
+              </svg>
+              <p className="text-sm text-red-700">{error}</p>
+            </div>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+            <div className="animate-pulse">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="px-6 py-4 border-b border-gray-100 last:border-b-0"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="h-4 bg-gray-200 rounded w-1/3 mb-2" />
+                      <div className="h-3 bg-gray-100 rounded w-1/2" />
+                    </div>
+                    <div className="flex gap-2 ml-4">
+                      <div className="h-6 bg-gray-200 rounded-full w-20" />
+                      <div className="h-6 bg-gray-200 rounded-full w-16" />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : data && data.workOrders.length > 0 ? (
+          <>
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+              {/* Table Header */}
+              <div className="hidden sm:grid sm:grid-cols-12 gap-4 px-6 py-3 bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <div className="col-span-4">Title</div>
+                <div className="col-span-2">Status</div>
+                <div className="col-span-2">Priority</div>
+                <div className="col-span-2">Assignee</div>
+                <div className="col-span-2">Due Date</div>
+              </div>
+
+              {/* Work Order Rows */}
+              <ul className="divide-y divide-gray-100">
+                {data.workOrders.map((wo) => (
+                  <li key={wo.id}>
+                    <Link
+                      href={`/work-orders/${wo.id}`}
+                      className="block hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="px-6 py-4">
+                        {/* Mobile layout */}
+                        <div className="sm:hidden">
+                          <div className="flex items-start justify-between mb-2">
+                            <h3 className="text-sm font-medium text-gray-900 flex-1 mr-2">
+                              {wo.title}
+                            </h3>
+                            <span
+                              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                PRIORITY_BADGE_STYLES[wo.priority] ??
+                                "bg-gray-100 text-gray-700"
+                              }`}
+                            >
+                              {PRIORITY_LABELS[wo.priority] ?? wo.priority}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                STATUS_BADGE_STYLES[wo.status] ??
+                                "bg-gray-100 text-gray-800"
+                              }`}
+                            >
+                              {STATUS_LABELS[wo.status] ?? wo.status}
+                            </span>
+                            {wo.assignee_name && (
+                              <span className="text-xs text-gray-500">
+                                {wo.assignee_name}
+                              </span>
+                            )}
+                            {wo.due_date && (
+                              <span className="text-xs text-gray-500">
+                                Due: {formatDate(wo.due_date)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Desktop layout */}
+                        <div className="hidden sm:grid sm:grid-cols-12 gap-4 items-center">
+                          <div className="col-span-4">
+                            <p className="text-sm font-medium text-gray-900 truncate">
+                              {wo.title}
+                            </p>
+                            {wo.description && (
+                              <p className="text-xs text-gray-500 truncate mt-0.5">
+                                {wo.description}
+                              </p>
+                            )}
+                          </div>
+                          <div className="col-span-2">
+                            <span
+                              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                STATUS_BADGE_STYLES[wo.status] ??
+                                "bg-gray-100 text-gray-800"
+                              }`}
+                            >
+                              {STATUS_LABELS[wo.status] ?? wo.status}
+                            </span>
+                          </div>
+                          <div className="col-span-2">
+                            <span
+                              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                PRIORITY_BADGE_STYLES[wo.priority] ??
+                                "bg-gray-100 text-gray-700"
+                              }`}
+                            >
+                              {PRIORITY_LABELS[wo.priority] ?? wo.priority}
+                            </span>
+                          </div>
+                          <div className="col-span-2">
+                            <span className="text-sm text-gray-600 truncate">
+                              {wo.assignee_name ?? "—"}
+                            </span>
+                          </div>
+                          <div className="col-span-2">
+                            <span className="text-sm text-gray-600">
+                              {formatDate(wo.due_date)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* Pagination */}
+            {data.totalPages > 1 && (
+              <div className="mt-6 flex items-center justify-between">
+                <div className="text-sm text-gray-700">
+                  Showing{" "}
+                  <span className="font-medium">
+                    {(data.page - 1) * data.pageSize + 1}
+                  </span>{" "}
+                  to{" "}
+                  <span className="font-medium">
+                    {Math.min(data.page * data.pageSize, data.total)}
+                  </span>{" "}
+                  of <span className="font-medium">{data.total}</span> results
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handlePageChange(data.page - 1)}
+                    disabled={data.page <= 1}
+                    className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors"
+                  >
+                    <svg
+                      className="h-4 w-4 mr-1"
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                    Previous
+                  </button>
+
+                  <div className="flex items-center gap-1">
+                    {Array.from(
+                      { length: Math.min(data.totalPages, 7) },
+                      (_, i) => {
+                        let pageNum: number;
+                        if (data.totalPages <= 7) {
+                          pageNum = i + 1;
+                        } else if (data.page <= 4) {
+                          pageNum = i + 1;
+                        } else if (data.page >= data.totalPages - 3) {
+                          pageNum = data.totalPages - 6 + i;
+                        } else {
+                          pageNum = data.page - 3 + i;
+                        }
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => handlePageChange(pageNum)}
+                            className={`inline-flex items-center justify-center w-9 h-9 border rounded-md text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors ${
+                              pageNum === data.page
+                                ? "border-indigo-500 bg-indigo-50 text-indigo-600"
+                                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      },
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => handlePageChange(data.page + 1)}
+                    disabled={data.page >= data.totalPages}
+                    className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors"
+                  >
+                    Next
+                    <svg
+                      className="h-4 w-4 ml-1"
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          !loading && (
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 py-16 text-center">
+              <svg
+                className="mx-auto h-12 w-12 text-gray-400"
                 xmlns="http://www.w3.org/2000/svg"
                 fill="none"
                 viewBox="0 0 24 24"
-                strokeWidth={1.5}
                 stroke="currentColor"
-                className="mb-4 h-12 w-12 text-gray-300"
+                aria-hidden="true"
               >
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z"
+                  strokeWidth={1.5}
+                  d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
                 />
               </svg>
-              <p className="text-lg font-medium text-gray-900">
+              <h3 className="mt-4 text-sm font-medium text-gray-900">
                 No work orders found
+              </h3>
+              <p className="mt-2 text-sm text-gray-500">
+                {search || status || priority
+                  ? "Try adjusting your filters or search query."
+                  : "Get started by creating a new work order."}
               </p>
-              <p className="mt-1 text-sm text-gray-500">
-                {workOrders.length === 0
-                  ? "Get started by creating your first work order."
-                  : "Try adjusting your filters to find what you're looking for."}
-              </p>
-              {workOrders.length === 0 && (
-                <Link
-                  href="/work-orders/new"
-                  className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 transition-colors"
-                >
-                  Create Work Order
-                </Link>
+              {!search && !status && !priority && (
+                <div className="mt-6">
+                  <Link
+                    href="/work-orders/new"
+                    className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors"
+                  >
+                    <svg
+                      className="-ml-1 mr-2 h-5 w-5"
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                      aria-hidden="true"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                    New Work Order
+                  </Link>
+                </div>
               )}
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th
-                      scope="col"
-                      className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500"
-                    >
-                      Work Order
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500"
-                    >
-                      Status
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500"
-                    >
-                      Priority
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500"
-                    >
-                      Assignee
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500"
-                    >
-                      Due Date
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500"
-                    >
-                      Created
-                    </th>
-                    <th scope="col" className="relative px-6 py-3">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 bg-white">
-                  {filteredWorkOrders.map((workOrder) => (
-                    <tr
-                      key={workOrder.id}
-                      className="hover:bg-gray-50 transition-colors"
-                    >
-                      <td className="px-6 py-4">
-                        <div className="max-w-xs">
-                          <Link
-                            href={`/work-orders/${workOrder.id}`}
-                            className="block font-medium text-gray-900 hover:text-blue-600 transition-colors truncate"
-                          >
-                            {workOrder.title}
-                          </Link>
-                          {workOrder.description && (
-                            <p className="mt-0.5 text-sm text-gray-500 truncate">
-                              {workOrder.description}
-                            </p>
-                          )}
-                        </div>
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4">
-                        <StatusBadge status={workOrder.status} />
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4">
-                        <PriorityBadge priority={workOrder.priority} />
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-700">
-                        {workOrder.assignee || (
-                          <span className="text-gray-400 italic">
-                            Unassigned
-                          </span>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-700">
-                        {formatDate(workOrder.dueDate)}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                        {formatDate(workOrder.createdAt)}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-right text-sm">
-                        <Link
-                          href={`/work-orders/${workOrder.id}`}
-                          className="font-medium text-blue-600 hover:text-blue-800 transition-colors"
-                        >
-                          View
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+          )
+        )}
       </div>
     </div>
   );

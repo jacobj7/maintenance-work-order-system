@@ -1,93 +1,79 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
 import { z } from "zod";
-import { Pool } from "pg";
+import { query } from "@/lib/db";
+import { authOptions } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
-
-const CreateLocationSchema = z.object({
-  name: z.string().min(1, "Name is required"),
-  address: z.string().optional(),
-  city: z.string().optional(),
-  state: z.string().optional(),
-  country: z.string().optional(),
-  postal_code: z.string().optional(),
-  latitude: z.number().optional(),
-  longitude: z.number().optional(),
-  description: z.string().optional(),
+const createLocationSchema = z.object({
+  name: z.string().min(1, "Name is required").max(255),
+  building: z.string().min(1, "Building is required").max(255),
+  floor: z.string().max(50).optional().nullable(),
+  room: z.string().max(100).optional().nullable(),
 });
 
 export async function GET(request: NextRequest) {
-  const client = await pool.connect();
   try {
-    const result = await client.query(
-      "SELECT * FROM locations ORDER BY created_at DESC",
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const result = await query(
+      `SELECT id, name, building, floor, room, created_at, updated_at
+       FROM locations
+       ORDER BY building ASC, floor ASC, room ASC, name ASC`,
+      [],
     );
-    return NextResponse.json({ locations: result.rows }, { status: 200 });
+
+    return NextResponse.json({ locations: result.rows });
   } catch (error) {
-    console.error("Error fetching locations:", error);
+    console.error("GET /api/locations error:", error);
     return NextResponse.json(
-      { error: "Failed to fetch locations" },
+      { error: "Internal server error" },
       { status: 500 },
     );
-  } finally {
-    client.release();
   }
 }
 
 export async function POST(request: NextRequest) {
-  const client = await pool.connect();
   try {
-    const body = await request.json();
-    const parsed = CreateLocationSchema.safeParse(body);
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-    if (!parsed.success) {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    const parseResult = createLocationSchema.safeParse(body);
+    if (!parseResult.success) {
       return NextResponse.json(
-        { error: "Validation failed", details: parsed.error.flatten() },
+        { error: "Validation failed", details: parseResult.error.flatten() },
         { status: 400 },
       );
     }
 
-    const {
-      name,
-      address,
-      city,
-      state,
-      country,
-      postal_code,
-      latitude,
-      longitude,
-      description,
-    } = parsed.data;
+    const { name, building, floor, room } = parseResult.data;
 
-    const result = await client.query(
-      `INSERT INTO locations (name, address, city, state, country, postal_code, latitude, longitude, description, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-       RETURNING *`,
-      [
-        name,
-        address ?? null,
-        city ?? null,
-        state ?? null,
-        country ?? null,
-        postal_code ?? null,
-        latitude ?? null,
-        longitude ?? null,
-        description ?? null,
-      ],
+    const result = await query(
+      `INSERT INTO locations (name, building, floor, room, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, NOW(), NOW())
+       RETURNING id, name, building, floor, room, created_at, updated_at`,
+      [name, building, floor ?? null, room ?? null],
     );
 
     return NextResponse.json({ location: result.rows[0] }, { status: 201 });
   } catch (error) {
-    console.error("Error creating location:", error);
+    console.error("POST /api/locations error:", error);
     return NextResponse.json(
-      { error: "Failed to create location" },
+      { error: "Internal server error" },
       { status: 500 },
     );
-  } finally {
-    client.release();
   }
 }

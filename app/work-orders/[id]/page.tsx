@@ -1,117 +1,138 @@
 import { notFound } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { db } from "@/lib/db";
-import WorkOrderDetailClient from "./WorkOrderDetailClient";
+import { query } from "@/lib/db";
+import WorkOrderDetailClient from "@/components/WorkOrderDetailClient";
+
+interface WorkOrder {
+  id: number;
+  title: string;
+  description: string | null;
+  status: string;
+  priority: string;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  created_by: number;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+  due_date: string | null;
+  location: string | null;
+  notes: string | null;
+  status_history: StatusHistoryEntry[];
+}
+
+interface StatusHistoryEntry {
+  id: number;
+  work_order_id: number;
+  old_status: string | null;
+  new_status: string;
+  changed_by: number;
+  changed_by_name: string | null;
+  changed_at: string;
+  notes: string | null;
+}
+
+async function getWorkOrder(id: string): Promise<WorkOrder | null> {
+  try {
+    const workOrderResult = await query(
+      `SELECT 
+        wo.id,
+        wo.title,
+        wo.description,
+        wo.status,
+        wo.priority,
+        wo.assigned_to,
+        u_assigned.name AS assigned_to_name,
+        wo.created_by,
+        u_created.name AS created_by_name,
+        wo.created_at,
+        wo.updated_at,
+        wo.due_date,
+        wo.location,
+        wo.notes
+      FROM work_orders wo
+      LEFT JOIN users u_assigned ON wo.assigned_to = u_assigned.id
+      LEFT JOIN users u_created ON wo.created_by = u_created.id
+      WHERE wo.id = $1`,
+      [id],
+    );
+
+    if (!workOrderResult.rows || workOrderResult.rows.length === 0) {
+      return null;
+    }
+
+    const workOrder = workOrderResult.rows[0];
+
+    const historyResult = await query(
+      `SELECT 
+        sh.id,
+        sh.work_order_id,
+        sh.old_status,
+        sh.new_status,
+        sh.changed_by,
+        u.name AS changed_by_name,
+        sh.changed_at,
+        sh.notes
+      FROM status_history sh
+      LEFT JOIN users u ON sh.changed_by = u.id
+      WHERE sh.work_order_id = $1
+      ORDER BY sh.changed_at DESC`,
+      [workOrder.id],
+    );
+
+    const statusHistory: StatusHistoryEntry[] = (historyResult.rows || []).map(
+      (row: Record<string, unknown>) => ({
+        id: row.id as number,
+        work_order_id: row.work_order_id as number,
+        old_status: row.old_status as string | null,
+        new_status: row.new_status as string,
+        changed_by: row.changed_by as number,
+        changed_by_name: row.changed_by_name as string | null,
+        changed_at:
+          row.changed_at instanceof Date
+            ? (row.changed_at as Date).toISOString()
+            : String(row.changed_at),
+        notes: row.notes as string | null,
+      }),
+    );
+
+    return {
+      id: workOrder.id,
+      title: workOrder.title,
+      description: workOrder.description,
+      status: workOrder.status,
+      priority: workOrder.priority,
+      assigned_to: workOrder.assigned_to,
+      assigned_to_name: workOrder.assigned_to_name,
+      created_by: workOrder.created_by,
+      created_by_name: workOrder.created_by_name,
+      created_at:
+        workOrder.created_at instanceof Date
+          ? workOrder.created_at.toISOString()
+          : String(workOrder.created_at),
+      updated_at:
+        workOrder.updated_at instanceof Date
+          ? workOrder.updated_at.toISOString()
+          : String(workOrder.updated_at),
+      due_date:
+        workOrder.due_date instanceof Date
+          ? workOrder.due_date.toISOString()
+          : workOrder.due_date
+            ? String(workOrder.due_date)
+            : null,
+      location: workOrder.location,
+      notes: workOrder.notes,
+      status_history: statusHistory,
+    };
+  } catch (error) {
+    console.error("Error fetching work order:", error);
+    return null;
+  }
+}
 
 interface PageProps {
   params: { id: string };
-}
-
-async function getWorkOrder(id: string) {
-  const result = await db.query(
-    `SELECT 
-      wo.id,
-      wo.title,
-      wo.description,
-      wo.status,
-      wo.priority,
-      wo.created_at,
-      wo.updated_at,
-      wo.due_date,
-      wo.completed_at,
-      wo.location,
-      wo.notes,
-      wo.created_by,
-      wo.assigned_to,
-      u_creator.name AS creator_name,
-      u_creator.email AS creator_email,
-      u_assignee.name AS assignee_name,
-      u_assignee.email AS assignee_email
-    FROM work_orders wo
-    LEFT JOIN users u_creator ON wo.created_by = u_creator.id
-    LEFT JOIN users u_assignee ON wo.assigned_to = u_assignee.id
-    WHERE wo.id = $1`,
-    [id],
-  );
-
-  return result.rows[0] || null;
-}
-
-async function getTechnicians() {
-  const result = await db.query(
-    `SELECT id, name, email, role
-     FROM users
-     WHERE role IN ('technician', 'admin')
-     ORDER BY name ASC`,
-  );
-  return result.rows;
-}
-
-async function getWorkOrderComments(workOrderId: string) {
-  const result = await db.query(
-    `SELECT 
-      c.id,
-      c.work_order_id,
-      c.content,
-      c.created_at,
-      c.user_id,
-      u.name AS user_name,
-      u.email AS user_email
-    FROM work_order_comments c
-    LEFT JOIN users u ON c.user_id = u.id
-    WHERE c.work_order_id = $1
-    ORDER BY c.created_at ASC`,
-    [workOrderId],
-  );
-  return result.rows;
-}
-
-function serializeWorkOrder(wo: Record<string, unknown>) {
-  return {
-    id: wo.id as string,
-    title: wo.title as string,
-    description: (wo.description as string) || null,
-    status: wo.status as string,
-    priority: wo.priority as string,
-    created_at: wo.created_at ? (wo.created_at as Date).toISOString() : null,
-    updated_at: wo.updated_at ? (wo.updated_at as Date).toISOString() : null,
-    due_date: wo.due_date ? (wo.due_date as Date).toISOString() : null,
-    completed_at: wo.completed_at
-      ? (wo.completed_at as Date).toISOString()
-      : null,
-    location: (wo.location as string) || null,
-    notes: (wo.notes as string) || null,
-    created_by: (wo.created_by as string) || null,
-    assigned_to: (wo.assigned_to as string) || null,
-    creator_name: (wo.creator_name as string) || null,
-    creator_email: (wo.creator_email as string) || null,
-    assignee_name: (wo.assignee_name as string) || null,
-    assignee_email: (wo.assignee_email as string) || null,
-  };
-}
-
-function serializeTechnician(tech: Record<string, unknown>) {
-  return {
-    id: tech.id as string,
-    name: (tech.name as string) || null,
-    email: tech.email as string,
-    role: tech.role as string,
-  };
-}
-
-function serializeComment(comment: Record<string, unknown>) {
-  return {
-    id: comment.id as string,
-    work_order_id: comment.work_order_id as string,
-    content: comment.content as string,
-    created_at: comment.created_at
-      ? (comment.created_at as Date).toISOString()
-      : null,
-    user_id: (comment.user_id as string) || null,
-    user_name: (comment.user_name as string) || null,
-    user_email: (comment.user_email as string) || null,
-  };
 }
 
 export default async function WorkOrderDetailPage({ params }: PageProps) {
@@ -121,29 +142,18 @@ export default async function WorkOrderDetailPage({ params }: PageProps) {
     notFound();
   }
 
-  const { id } = params;
-
-  const [workOrder, technicians, comments] = await Promise.all([
-    getWorkOrder(id),
-    getTechnicians(),
-    getWorkOrderComments(id),
-  ]);
+  const workOrder = await getWorkOrder(params.id);
 
   if (!workOrder) {
     notFound();
   }
 
-  const serializedWorkOrder = serializeWorkOrder(workOrder);
-  const serializedTechnicians = technicians.map(serializeTechnician);
-  const serializedComments = comments.map(serializeComment);
+  const serializedWorkOrder = JSON.parse(JSON.stringify(workOrder));
 
   return (
     <WorkOrderDetailClient
       workOrder={serializedWorkOrder}
-      technicians={serializedTechnicians}
-      comments={serializedComments}
-      currentUserId={session.user?.id as string}
-      currentUserRole={session.user?.role as string}
+      currentUserId={session.user?.id as string | undefined}
     />
   );
 }

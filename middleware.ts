@@ -1,20 +1,38 @@
-import { withAuth } from "next-auth/middleware";
-import { NextResponse } from "next/server";
+import { getToken } from "next-auth/jwt";
+import { NextRequest, NextResponse } from "next/server";
 
-export default withAuth(
-  function middleware(req) {
+const protectedRoutes = ["/dashboard", "/work-orders", "/assets", "/locations"];
+
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  const isProtected = protectedRoutes.some(
+    (route) => pathname === route || pathname.startsWith(`${route}/`),
+  );
+
+  if (!isProtected) {
     return NextResponse.next();
-  },
-  {
-    callbacks: {
-      authorized: ({ token }) => !!token,
-    },
-    pages: {
-      signIn: "/login",
-    },
-  },
-);
+  }
+
+  const token = await getToken({
+    req: request,
+    secret: process.env.NEXTAUTH_SECRET,
+  });
+
+  if (!token) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("callbackUrl", request.url);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  return NextResponse.next();
+}
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/work-orders/:path*", "/technician/:path*"],
+  matcher: [
+    "/dashboard/:path*",
+    "/work-orders/:path*",
+    "/assets/:path*",
+    "/locations/:path*",
+  ],
 };
