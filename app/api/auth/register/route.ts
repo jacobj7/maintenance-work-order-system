@@ -1,74 +1,79 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { query } from "@/lib/db";
 
-export const dynamic = "force-dynamic";
-
 const registerSchema = z.object({
+  name: z.string().min(1, "Name is required"),
   email: z.string().email("Invalid email address"),
   password: z.string().min(8, "Password must be at least 8 characters"),
-  name: z.string().min(1, "Name is required").max(255, "Name is too long"),
-  role: z.enum(["admin", "user", "moderator"]).default("user"),
 });
 
-export async function POST(request: NextRequest) {
+export async function POST(request: Request) {
   try {
     const body = await request.json();
+    const parsed = registerSchema.safeParse(body);
 
-    const validationResult = registerSchema.safeParse(body);
-    if (!validationResult.success) {
+    if (!parsed.success) {
       return NextResponse.json(
-        {
-          error: "Validation failed",
-          details: validationResult.error.flatten().fieldErrors,
-        },
+        { error: "Validation failed", details: parsed.error.flatten() },
         { status: 400 },
       );
     }
 
-    const { email, password, name, role } = validationResult.data;
+    const { name, email, password } = parsed.data;
 
-    const existingUser = await query("SELECT id FROM users WHERE email = $1", [
-      email,
-    ]);
+    const existingUsers = await query<{ id: string }>(
+      "SELECT id FROM users WHERE email = $1",
+      [email],
+    );
 
-    if (existingUser.rows.length > 0) {
+    if (existingUsers.length > 0) {
       return NextResponse.json(
-        { error: "A user with this email already exists" },
+        { error: "An account with this email already exists" },
         { status: 409 },
       );
     }
 
-    const saltRounds = 12;
-    const passwordHash = await bcrypt.hash(password, saltRounds);
+    const passwordHash = await bcrypt.hash(password, 12);
 
-    const result = await query(
-      `INSERT INTO users (email, password_hash, name, role, created_at, updated_at)
+    const hardcodedRole = "requestor";
+
+    const newUsers = await query<{
+      id: string;
+      name: string;
+      email: string;
+      role: string;
+    }>(
+      `INSERT INTO users (name, email, password_hash, role, created_at, updated_at)
        VALUES ($1, $2, $3, $4, NOW(), NOW())
-       RETURNING id, email, name, role, created_at, updated_at`,
-      [email, passwordHash, name, role],
+       RETURNING id, name, email, role`,
+      [name, email, passwordHash, hardcodedRole],
     );
 
-    const createdUser = result.rows[0];
+    if (newUsers.length === 0) {
+      return NextResponse.json(
+        { error: "Failed to create account" },
+        { status: 500 },
+      );
+    }
+
+    const newUser = newUsers[0];
 
     return NextResponse.json(
       {
-        message: "User created successfully",
-        user: createdUser,
+        message: "Account created successfully",
+        user: {
+          id: newUser.id,
+          name: newUser.name,
+          email: newUser.email,
+          role: newUser.role,
+        },
       },
       { status: 201 },
     );
   } catch (error) {
     console.error("Registration error:", error);
-
-    if (error instanceof SyntaxError) {
-      return NextResponse.json(
-        { error: "Invalid JSON in request body" },
-        { status: 400 },
-      );
-    }
-
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
