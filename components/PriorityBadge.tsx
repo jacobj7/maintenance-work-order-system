@@ -1,55 +1,46 @@
 import React from "react";
 
-type Priority = "low" | "medium" | "high" | "urgent";
+type Priority = "low" | "medium" | "high" | "critical";
 
 interface PriorityBadgeProps {
-  priority: Priority;
+  priority: Priority | string;
   className?: string;
 }
 
-const priorityConfig: Record<
-  Priority,
-  { label: string; bgColor: string; textColor: string; borderColor: string }
-> = {
+const priorityConfig: Record<Priority, { label: string; classes: string }> = {
   low: {
     label: "Low",
-    bgColor: "bg-gray-100",
-    textColor: "text-gray-700",
-    borderColor: "border-gray-300",
+    classes: "bg-green-100 text-green-800 border border-green-200",
   },
   medium: {
     label: "Medium",
-    bgColor: "bg-blue-100",
-    textColor: "text-blue-700",
-    borderColor: "border-blue-300",
+    classes: "bg-yellow-100 text-yellow-800 border border-yellow-200",
   },
   high: {
     label: "High",
-    bgColor: "bg-orange-100",
-    textColor: "text-orange-700",
-    borderColor: "border-orange-300",
+    classes: "bg-orange-100 text-orange-800 border border-orange-200",
   },
-  urgent: {
-    label: "Urgent",
-    bgColor: "bg-red-100",
-    textColor: "text-red-700",
-    borderColor: "border-red-300",
+  critical: {
+    label: "Critical",
+    classes: "bg-red-100 text-red-800 border border-red-200",
   },
+};
+
+const defaultConfig = {
+  label: "Unknown",
+  classes: "bg-gray-100 text-gray-800 border border-gray-200",
 };
 
 export function PriorityBadge({
   priority,
   className = "",
 }: PriorityBadgeProps) {
-  const config = priorityConfig[priority];
-
-  if (!config) {
-    return null;
-  }
+  const normalizedPriority = priority?.toLowerCase() as Priority;
+  const config = priorityConfig[normalizedPriority] ?? defaultConfig;
 
   return (
     <span
-      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${config.bgColor} ${config.textColor} ${config.borderColor} ${className}`}
+      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.classes} ${className}`}
     >
       {config.label}
     </span>
